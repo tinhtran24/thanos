@@ -92,6 +92,31 @@ When source files already exist, initialization writes
 
 `thanos run` resumes from the phase stored in `.thanos/F001-.../state.json`.
 
+### Project framework metadata
+
+Initialization persists at most one canonical framework as
+`project.framework` in `.thanos/settings.json`. A trimmed non-empty
+`--framework VALUE` overrides automatic detection. Automatic selection uses the
+final project language after `--language` is applied.
+
+Canonical values are `wordpress`, `laravel`, `nextjs`, `nestjs`, `angular`,
+`nuxt`, `gin`, `echo`, `django`, `flask`, `fastapi`, `actix-web`, `axum`, and
+`rocket`.
+
+Only root evidence is inspected:
+
+- PHP reads `composer.json` and checks `artisan` plus `bootstrap/app.php`, and
+  the `wp-admin`, `wp-includes`, and `wp-content` directories.
+- TypeScript reads `package.json`.
+- Go reads `go.mod`.
+- Python reads `pyproject.toml` and root `requirements*.txt` files.
+- Rust reads `Cargo.toml`.
+
+Zero matches produce no framework. Multiple matches are ambiguous and also
+produce no framework. An empty framework is omitted from settings. Framework
+detection is local, read-only, and network-free. It does not run a package
+manager or execute a project command.
+
 ## Runner contract
 
 A runner is any executable that:

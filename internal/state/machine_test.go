@@ -47,3 +47,35 @@ func TestRoundLimitEscalates(t *testing.T) {
 		t.Fatalf("phase = %s, want %s", got.Phase, model.PhaseAttention)
 	}
 }
+
+func TestResumeFailedRound(t *testing.T) {
+	current := model.State{
+		FeatureID: "F002-test",
+		Phase:     model.PhaseAttention,
+		Role:      "",
+		Round:     5,
+		MaxRounds: 10,
+		Reason:    "maximum amendment rounds reached",
+	}
+	got, err := ResumeFailedRound(current, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Phase != model.PhaseAmend || got.Role != model.RoleCoder || got.Round != 3 {
+		t.Fatalf("resumed state = %+v", got)
+	}
+	if !got.Active || got.Reason != "" || got.MaxRounds != 10 {
+		t.Fatalf("resumed metadata = %+v", got)
+	}
+}
+
+func TestResumeFailedRoundRequiresAttention(t *testing.T) {
+	_, err := ResumeFailedRound(model.State{
+		FeatureID: "F002-test",
+		Phase:     model.PhaseReview,
+		Round:     3,
+	}, 3)
+	if err == nil {
+		t.Fatal("expected recovery error")
+	}
+}

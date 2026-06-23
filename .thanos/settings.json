@@ -1,0 +1,19 @@
+{
+  "project": {
+    "name": "thanos",
+    "description": "",
+    "language": "go",
+    "build": ["go build ./..."],
+    "test": ["go test ./..."],
+    "lint": ["go vet ./..."],
+    "rules": ["Keep role outputs isolated in .thanos.", "Do not bypass the deterministic phase state machine.", "Every implementation change requires objective test evidence."]
+  },
+  "default_runner": "codex",
+  "max_rounds": 10,
+  "runners": {
+    "codex": {
+      "command": "codex",
+      "args": ["exec", "--full-auto", "-"]
+    }
+  }
+}

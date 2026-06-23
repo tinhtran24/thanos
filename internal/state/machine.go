@@ -58,6 +58,22 @@ func Transition(current model.State, to model.Phase) (model.State, error) {
 	return current, nil
 }
 
+func ResumeFailedRound(current model.State, round int) (model.State, error) {
+	if current.Phase != model.PhaseAttention {
+		return current, fmt.Errorf("cannot continue %s from %s", current.FeatureID, current.Phase)
+	}
+	if round < 1 || round > current.Round {
+		return current, fmt.Errorf("invalid failed round %d for current round %d", round, current.Round)
+	}
+	current.Phase = model.PhaseAmend
+	current.Role = model.RoleCoder
+	current.Round = round
+	current.Active = true
+	current.Reason = ""
+	current.UpdatedAt = time.Now().UTC()
+	return current, nil
+}
+
 func RoleForPhase(phase model.Phase) model.Role {
 	switch phase {
 	case model.PhaseDesign:

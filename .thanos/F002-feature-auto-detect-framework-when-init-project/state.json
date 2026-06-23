@@ -1,0 +1,11 @@
+{
+  "feature_id": "F002-feature-auto-detect-framework-when-init-project",
+  "phase": "needs-attention",
+  "round": 5,
+  "max_rounds": 4,
+  "active": true,
+  "runner": "codex",
+  "created_at": "2026-06-23T08:13:55.859579Z",
+  "updated_at": "2026-06-23T09:23:20.175577Z",
+  "reason": "maximum amendment rounds reached"
+}

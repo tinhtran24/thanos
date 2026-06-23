@@ -2,12 +2,12 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
 
 	"github.com/tinhtran/thanos/internal/cli"
+	"github.com/tinhtran/thanos/internal/ui"
 )
 
 var version = "dev"
@@ -17,7 +17,10 @@ func main() {
 	defer stop()
 
 	if err := cli.Execute(ctx, os.Args[1:], version, os.Stdout, os.Stderr); err != nil {
-		fmt.Fprintln(os.Stderr, "error:", err)
+		ui.Block(os.Stderr, ui.Failure(ui.ErrorDetails{
+			Title:  "Thanos Command Failed",
+			Reason: err.Error(),
+		}))
 		os.Exit(1)
 	}
 }

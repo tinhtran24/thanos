@@ -40,6 +40,7 @@ type Project struct {
 	Name           string   `json:"name"`
 	Description    string   `json:"description"`
 	Language       string   `json:"language"`
+	Framework      string   `json:"framework,omitempty"`
 	PackageManager string   `json:"package_manager,omitempty"`
 	MultiPackage   bool     `json:"multi_package,omitempty"`
 	Packages       []string `json:"packages,omitempty"`

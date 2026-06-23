@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -79,6 +80,237 @@ func TestRunInitDetectsTypeScriptCommandsAndWorkspace(t *testing.T) {
 		!reflect.DeepEqual(config.Project.Test, []string{"npm test"}) ||
 		!reflect.DeepEqual(config.Project.Lint, []string{"npm run lint"}) {
 		t.Fatalf("commands = %+v", config.Project)
+	}
+}
+
+func TestRunInitAutoDetectsFramework(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "package.json"), []byte(`{"dependencies":{"next":"15"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "index.ts"), []byte("export const app = true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ws := workspace.Open(root)
+	if err := runInit(context.Background(), ws, nil, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	config, err := ws.ReadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.Project.Framework != "nextjs" {
+		t.Fatalf("framework = %q", config.Project.Framework)
+	}
+}
+
+func TestRunInitLanguageOverrideSelectsFramework(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "package.json"), []byte(`{"dependencies":{"next":"15"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ws := workspace.Open(root)
+	if err := runInit(context.Background(), ws, []string{"--language", "typescript"}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	config, err := ws.ReadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.Project.Language != "typescript" || config.Project.Framework != "nextjs" {
+		t.Fatalf("project = %+v", config.Project)
+	}
+}
+
+func TestRunInitFrameworkOverrideIsTrimmed(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "package.json"), []byte(`{"dependencies":{"next":"15"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ws := workspace.Open(root)
+	if err := runInit(context.Background(), ws, []string{"--language", "typescript", "--framework", " custom-web "}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	config, err := ws.ReadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.Project.Framework != "custom-web" {
+		t.Fatalf("framework = %q", config.Project.Framework)
+	}
+}
+
+func TestRunInitWhitespaceFrameworkRetainsDetection(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "package.json"), []byte(`{"dependencies":{"nuxt":"4"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ws := workspace.Open(root)
+	if err := runInit(context.Background(), ws, []string{"--language", "typescript", "--framework", " \t "}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	config, err := ws.ReadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.Project.Framework != "nuxt" {
+		t.Fatalf("framework = %q", config.Project.Framework)
+	}
+}
+
+func TestRunInitEmptyFrameworkIsOmitted(t *testing.T) {
+	ws := workspace.Open(t.TempDir())
+	if err := runInit(context.Background(), ws, nil, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(ws.DotDir(), "settings.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), `"framework"`) {
+		t.Fatalf("settings contain empty framework: %s", data)
+	}
+}
+
+func TestRunInitFrameworkErrorPreventsSettings(t *testing.T) {
+	original := detectFramework
+	detectFramework = func(root, language string) (string, error) {
+		return "", errors.New("evidence unavailable")
+	}
+	defer func() { detectFramework = original }()
+
+	ws := workspace.Open(t.TempDir())
+	err := runInit(context.Background(), ws, nil, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "detect framework: evidence unavailable") {
+		t.Fatalf("error = %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(ws.DotDir(), "settings.json")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("settings stat error = %v", statErr)
+	}
+}
+
+func TestRunInitFrameworkDetectionDoesNotExecuteCommands(t *testing.T) {
+	restore := stubExternal(t, func(root, name string, args []string) error {
+		return errors.New("unexpected subprocess")
+	})
+	defer restore()
+
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "package.json"), []byte(`{"dependencies":{"next":"15"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := runInit(context.Background(), workspace.Open(root), []string{"--language", "typescript"}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestInitHelpIncludesFramework(t *testing.T) {
+	var output strings.Builder
+	printHelp(&output)
+	if !strings.Contains(output.String(), "--framework") {
+		t.Fatalf("help = %q", output.String())
+	}
+}
+
+func TestContinueHelpIsDocumented(t *testing.T) {
+	var output strings.Builder
+	printHelp(&output)
+	if !strings.Contains(output.String(), "thanos continue FEATURE_ID") {
+		t.Fatalf("help = %q", output.String())
+	}
+}
+
+func TestPrepareContinueResumesLatestFailedRound(t *testing.T) {
+	ws := initializedWorkspace(t)
+	feature := model.Feature{ID: "F002-test", Title: "Test", Status: "todo"}
+	if err := ws.SaveFeature(feature); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(ws.RuntimeDir(feature.ID), "rounds", "round-3"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	reportPath := filepath.Join(ws.RuntimeDir(feature.ID), "rounds", "round-3", "review-report.md")
+	if err := os.WriteFile(reportPath, []byte("## Verdict\nFAIL — 12/13 criteria met"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := ws.WriteState(model.State{
+		FeatureID: feature.ID,
+		Phase:     model.PhaseAttention,
+		Round:     5,
+		MaxRounds: 10,
+		Reason:    "maximum amendment rounds reached",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var output strings.Builder
+	id, err := prepareContinue(ws, "F002", &output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id != feature.ID {
+		t.Fatalf("feature ID = %q", id)
+	}
+	current, err := ws.ReadState(feature.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Phase != model.PhaseAmend || current.Role != model.RoleCoder || current.Round != 3 {
+		t.Fatalf("state = %+v", current)
+	}
+	if current.Reason != "" || !current.Active {
+		t.Fatalf("state metadata = %+v", current)
+	}
+	if !strings.Contains(output.String(), "Continuing failed round 3") {
+		t.Fatalf("output = %q", output.String())
+	}
+}
+
+func TestPrepareContinueRequiresFailedReport(t *testing.T) {
+	ws := initializedWorkspace(t)
+	feature := model.Feature{ID: "F002-test", Title: "Test", Status: "todo"}
+	if err := ws.SaveFeature(feature); err != nil {
+		t.Fatal(err)
+	}
+	if err := ws.WriteState(model.State{
+		FeatureID: feature.ID,
+		Phase:     model.PhaseAttention,
+		Round:     3,
+		MaxRounds: 3,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := prepareContinue(ws, feature.ID, io.Discard); err == nil {
+		t.Fatal("expected missing failed report error")
+	}
+}
+
+func TestFrameworkDocumentation(t *testing.T) {
+	required := []string{
+		"project.framework", "--framework",
+		"wordpress", "laravel", "nextjs", "nestjs", "angular", "nuxt",
+		"gin", "echo", "django", "flask", "fastapi", "actix-web", "axum", "rocket",
+		"composer.json", "artisan", "bootstrap/app.php", "wp-admin", "wp-includes", "wp-content",
+		"package.json", "go.mod", "pyproject.toml", "requirements*.txt", "Cargo.toml",
+		"final", "--language", "ambiguous", "omitted", "local", "read-only", "network-free",
+		"package manager", "project command",
+	}
+	for _, document := range []string{"README.md", "Technical.md"} {
+		t.Run(document, func(t *testing.T) {
+			data, err := os.ReadFile(filepath.Join("..", "..", document))
+			if err != nil {
+				t.Fatal(err)
+			}
+			content := string(data)
+			for _, token := range required {
+				if !strings.Contains(content, token) {
+					t.Errorf("%s missing %q", document, token)
+				}
+			}
+		})
 	}
 }
 

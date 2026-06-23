@@ -14,6 +14,7 @@ import (
 	"github.com/tinhtran/thanos/internal/prompts"
 	"github.com/tinhtran/thanos/internal/runner"
 	"github.com/tinhtran/thanos/internal/state"
+	"github.com/tinhtran/thanos/internal/ui"
 	"github.com/tinhtran/thanos/internal/workspace"
 )
 
@@ -136,7 +137,12 @@ func (o *Orchestrator) Run(ctx context.Context, featureID, runnerOverride string
 				}
 			}
 		case model.PhasePending:
-			fmt.Fprintf(o.Stdout, "%s is pending human review. Run: thanos done %s\n", feature.ID, feature.ID)
+			ui.Block(o.Stdout, ui.ExecLog(ui.ExecLogEntry{
+				Type:    "read",
+				Path:    filepath.Join(o.Workspace.DotDir(), feature.ID, "state.json"),
+				Message: fmt.Sprintf("%s is pending human review. Run: thanos done %s", feature.ID, feature.ID),
+				Status:  ui.Completed,
+			}))
 			return nil
 		case model.PhaseDone:
 			return nil
@@ -170,8 +176,22 @@ func (o *Orchestrator) executeRole(ctx context.Context, feature model.Feature, c
 		Type: "role-start", FeatureID: feature.ID, Timestamp: time.Now().UTC(),
 		Phase: current.Phase, Role: current.Role, Round: current.Round,
 	})
-	fmt.Fprintf(o.Stdout, "[%s] %s (round %d)\n", feature.ID, current.Role, current.Round)
+	command := strings.TrimSpace(runnerConfig.Command + " " + strings.Join(runnerConfig.Args, " "))
+	started := time.Now()
+	ui.Block(o.Stdout, ui.ExecLog(ui.ExecLogEntry{
+		Type: "exec", Command: command, Workdir: o.Workspace.Root, Status: ui.Running,
+		Message: fmt.Sprintf("%s %s (round %d) running", feature.ID, current.Role, current.Round),
+	}))
 	err = o.Runner.Run(ctx, o.Workspace.Root, runnerConfig, prompt, o.Stdout, o.Stderr)
+	status := ui.Succeeded
+	output := o.Stdout
+	if err != nil {
+		status = ui.Failed
+		output = o.Stderr
+	}
+	ui.Block(output, ui.ExecLog(ui.ExecLogEntry{
+		Status: status, DurationMs: time.Since(started).Milliseconds(),
+	}))
 	data := map[string]any{"success": err == nil}
 	if err != nil {
 		data["error"] = err.Error()

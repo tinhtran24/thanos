@@ -124,6 +124,30 @@ thanos done F001
 
 Interrupted runs resume from `.thanos/<feature-id>/state.json`.
 
+### Framework detection during init
+
+`thanos init` stores a single canonical value in `project.framework` inside
+`.thanos/settings.json`. Use `--framework VALUE` to supply an explicit value;
+surrounding whitespace is trimmed. The supported auto-detected values are
+`wordpress`, `laravel`, `nextjs`, `nestjs`, `angular`, `nuxt`, `gin`, `echo`,
+`django`, `flask`, `fastapi`, `actix-web`, `axum`, and `rocket`.
+
+Detection uses only root evidence for the final selected language, after any
+`--language` override:
+
+- PHP: `composer.json`, or the `artisan` and `bootstrap/app.php` Laravel
+  markers, or the `wp-admin`, `wp-includes`, and `wp-content` WordPress
+  directories.
+- TypeScript: `package.json`.
+- Go: `go.mod`.
+- Python: `pyproject.toml` and root `requirements*.txt` files.
+- Rust: `Cargo.toml`.
+
+If evidence identifies multiple supported frameworks, detection is ambiguous
+and writes no framework. An empty framework is omitted from settings. Detection
+is local, read-only, and network-free; it runs no package manager and executes
+no project command.
+
 ## Local Codebase Graph for AI Agents
 
 A codebase is structure, not only text. Thanos records source files, programming
