@@ -37,13 +37,16 @@ const (
 )
 
 type Project struct {
-	Name        string   `json:"name"`
-	Description string   `json:"description"`
-	Language    string   `json:"language"`
-	Build       []string `json:"build,omitempty"`
-	Test        []string `json:"test,omitempty"`
-	Lint        []string `json:"lint,omitempty"`
-	Rules       []string `json:"rules,omitempty"`
+	Name           string   `json:"name"`
+	Description    string   `json:"description"`
+	Language       string   `json:"language"`
+	PackageManager string   `json:"package_manager,omitempty"`
+	MultiPackage   bool     `json:"multi_package,omitempty"`
+	Packages       []string `json:"packages,omitempty"`
+	Build          []string `json:"build,omitempty"`
+	Test           []string `json:"test,omitempty"`
+	Lint           []string `json:"lint,omitempty"`
+	Rules          []string `json:"rules,omitempty"`
 }
 
 type Runner struct {

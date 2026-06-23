@@ -64,6 +64,12 @@ approval.
 
 ## Installation
 
+Homebrew (macOS / Linux)
+
+```
+brew install tinhtran24/tap/thanos
+```
+
 Thanos requires Go 1.20 or newer.
 
 ```bash

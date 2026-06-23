@@ -46,6 +46,42 @@ func TestRunInitScansExistingProject(t *testing.T) {
 	}
 }
 
+func TestRunInitDetectsTypeScriptCommandsAndWorkspace(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "package.json"), []byte(`{
+  "workspaces": ["apps/*"],
+  "scripts": {"build": "turbo build", "test": "turbo test", "lint": "turbo lint"}
+}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	app := filepath.Join(root, "apps", "web")
+	if err := os.MkdirAll(app, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(app, "package.json"), []byte(`{"name":"web"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(app, "index.ts"), []byte("export const app = true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ws := workspace.Open(root)
+	if err := runInit(context.Background(), ws, nil, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	config, err := ws.ReadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.Project.Language != "typescript" || !config.Project.MultiPackage {
+		t.Fatalf("project = %+v", config.Project)
+	}
+	if !reflect.DeepEqual(config.Project.Build, []string{"npm run build"}) ||
+		!reflect.DeepEqual(config.Project.Test, []string{"npm test"}) ||
+		!reflect.DeepEqual(config.Project.Lint, []string{"npm run lint"}) {
+		t.Fatalf("commands = %+v", config.Project)
+	}
+}
+
 func TestRunScanRefreshesGraph(t *testing.T) {
 	ws := initializedWorkspace(t)
 	if err := os.WriteFile(filepath.Join(ws.Root, "service.go"), []byte("package service\nfunc Run() {}\n"), 0o644); err != nil {

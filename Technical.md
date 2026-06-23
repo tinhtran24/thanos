@@ -252,9 +252,10 @@ thanos scan
 ```
 
 The scanner ignores generated and dependency directories including `.git`,
-`.thanos`, `.sense`, `node_modules`, `vendor`, `dist`, and `build`. It extracts
-Go symbols and call relationships with the Go parser, plus lightweight symbol
-detection for TypeScript, JavaScript, and Python.
+`.thanos`, `.sense`, `node_modules`, `vendor`, `dist`, `build`, `.build`,
+`.nestjs`, and `.medusa`. It extracts Go symbols and call relationships with the
+Go parser, plus lightweight symbol detection for TypeScript, JavaScript, and
+Python.
 
 Outputs:
 

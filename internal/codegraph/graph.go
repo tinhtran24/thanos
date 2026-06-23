@@ -59,9 +59,20 @@ var (
 
 var ignoredDirs = map[string]bool{
 	".git": true, ".thanos": true, ".sense": true, "node_modules": true,
-	"vendor": true, "dist": true, "build": true, "coverage": true,
-	".next": true, ".cache": true, "__pycache__": true,
+	"vendor": true, "dist": true, "build": true, ".build": true, "coverage": true,
+	".next": true, ".nuxt": true, ".output": true, ".cache": true, ".turbo": true,
+	".nestjs": true, ".medusa": true, ".svelte-kit": true, "__pycache__": true,
+	"target": true, "out": true, "bin": true, "obj": true,
 }
+
+var ignoredDirNames = func() []string {
+	names := make([]string, 0, len(ignoredDirs))
+	for name := range ignoredDirs {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}()
 
 func HasSource(root string) bool {
 	found := false
@@ -80,7 +91,7 @@ func Build(root string) (Graph, error) {
 	graph := Graph{
 		Version: 1, Root: absolute, GeneratedAt: time.Now().UTC(),
 		Languages: map[string]int{},
-		Ignored:   []string{".git", ".thanos", ".sense", "node_modules", "vendor", "dist", "build", "coverage"},
+		Ignored:   append([]string(nil), ignoredDirNames...),
 	}
 	var pending []pendingCall
 	symbolsByName := map[string][]string{}

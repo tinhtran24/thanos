@@ -22,6 +22,11 @@ Description: {{.Feature.Description}}
 == Project ==
 Name: {{.Config.Project.Name}}
 Language: {{.Config.Project.Language}}
+{{if .Config.Project.PackageManager}}Package manager: {{.Config.Project.PackageManager}}
+{{end}}{{if .Config.Project.MultiPackage}}Repository layout: multiple packages
+Packages:
+{{range .Config.Project.Packages}}- {{.}}
+{{end}}{{end}}
 {{if .Config.Project.Rules}}Rules:
 {{range .Config.Project.Rules}}- {{.}}
 {{end}}{{end}}

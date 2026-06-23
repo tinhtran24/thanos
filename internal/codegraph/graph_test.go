@@ -62,14 +62,16 @@ func TestSaveWritesLocalGraph(t *testing.T) {
 
 func TestHasSourceIgnoresGeneratedDirectories(t *testing.T) {
 	root := t.TempDir()
-	path := filepath.Join(root, "node_modules", "package", "index.js")
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte("function hidden() {}"), 0o644); err != nil {
-		t.Fatal(err)
+	for _, directory := range []string{"node_modules", ".build", ".nestjs", ".medusa"} {
+		path := filepath.Join(root, directory, "package", "index.js")
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("function hidden() {}"), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if HasSource(root) {
-		t.Fatal("node_modules source should be ignored")
+		t.Fatal("generated directory source should be ignored")
 	}
 }

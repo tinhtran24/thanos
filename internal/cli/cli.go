@@ -16,6 +16,7 @@ import (
 	"github.com/tinhtran/thanos/internal/codegraph"
 	"github.com/tinhtran/thanos/internal/model"
 	"github.com/tinhtran/thanos/internal/orchestrator"
+	"github.com/tinhtran/thanos/internal/project"
 	"github.com/tinhtran/thanos/internal/prompts"
 	"github.com/tinhtran/thanos/internal/runner"
 	"github.com/tinhtran/thanos/internal/state"
@@ -73,23 +74,42 @@ func Execute(ctx context.Context, args []string, version string, stdout, stderr 
 func runInit(_ context.Context, ws *workspace.Workspace, args []string, stdout io.Writer) error {
 	flags := flag.NewFlagSet("init", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
-	name := flags.String("name", filepath.Base(ws.Root), "project name")
-	language := flags.String("language", "go", "project language")
+	name := flags.String("name", "", "project name override")
+	language := flags.String("language", "", "project language override")
 	runnerName := flags.String("runner", "codex", "default runner")
 	runnerCommand := flags.String("runner-command", "codex", "runner executable")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
+	hasSource := codegraph.HasSource(ws.Root)
+	var graph modelGraph
+	languages := map[string]int{}
+	if hasSource {
+		built, err := codegraph.Build(ws.Root)
+		if err != nil {
+			return fmt.Errorf("scan existing codebase: %w", err)
+		}
+		graph.value = built
+		graph.present = true
+		languages = built.Languages
+	}
+	detected, err := project.Detect(ws.Root, languages)
+	if err != nil {
+		return fmt.Errorf("detect project: %w", err)
+	}
+	if *name != "" {
+		detected.Name = *name
+	}
+	if *language != "" {
+		detected.Language = *language
+	}
+	detected.Rules = []string{
+		"Keep role outputs isolated in .thanos.",
+		"Do not bypass the deterministic phase state machine.",
+		"Every implementation change requires objective test evidence.",
+	}
 	config := model.Config{
-		Project: model.Project{
-			Name: *name, Language: *language,
-			Build: []string{"go build ./..."}, Test: []string{"go test ./..."}, Lint: []string{"go vet ./..."},
-			Rules: []string{
-				"Keep role outputs isolated in .thanos.",
-				"Do not bypass the deterministic phase state machine.",
-				"Every implementation change requires objective test evidence.",
-			},
-		},
+		Project:       detected,
 		DefaultRunner: *runnerName,
 		MaxRounds:     3,
 		Locale:        "en",
@@ -101,16 +121,6 @@ func runInit(_ context.Context, ws *workspace.Workspace, args []string, stdout i
 				SkillsDir: defaultSkillsDir(*runnerName),
 			},
 		},
-	}
-	hasSource := codegraph.HasSource(ws.Root)
-	var graph modelGraph
-	if hasSource {
-		built, err := codegraph.Build(ws.Root)
-		if err != nil {
-			return fmt.Errorf("scan existing codebase: %w", err)
-		}
-		graph.value = built
-		graph.present = true
 	}
 	if err := ws.Init(config); err != nil {
 		return err
