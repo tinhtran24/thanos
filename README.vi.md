@@ -61,6 +61,12 @@ kiểm tra artifact, khôi phục tiến trình và bước phê duyệt của c
 
 ## Cài đặt
 
+Homebrew (macOS / Linux)
+
+```
+brew install tinhtran24/tap/thanos
+```
+
 Yêu cầu Go 1.20 trở lên.
 
 ```bash
