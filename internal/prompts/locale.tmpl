@@ -1,0 +1,6 @@
+{{- if and .Locale (ne .Locale "en")}}
+== Language ==
+Write all reports, summaries, descriptions, and comments in {{.LocaleName}}.
+Keep technical terms, file paths, command names, and code identifiers unchanged.
+
+{{end -}}

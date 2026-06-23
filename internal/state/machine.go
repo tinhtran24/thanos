@@ -1,0 +1,80 @@
+package state
+
+import (
+	"fmt"
+	"time"
+
+	"github.com/tinhtran/thanos/internal/model"
+)
+
+var transitions = map[model.Phase][]model.Phase{
+	model.PhaseInit:         {model.PhaseDesign},
+	model.PhaseDesign:       {model.PhaseDesignReview},
+	model.PhaseDesignReview: {model.PhaseCode, model.PhaseDesign},
+	model.PhaseCode:         {model.PhaseReview},
+	model.PhaseReview:       {model.PhaseTest, model.PhaseAmend},
+	model.PhaseAmend:        {model.PhaseReview},
+	model.PhaseTest:         {model.PhaseDeepReview, model.PhaseAmend},
+	model.PhaseDeepReview:   {model.PhaseAccept, model.PhaseAmend},
+	model.PhaseAccept:       {model.PhasePending},
+	model.PhasePending:      {model.PhaseDone},
+	model.PhaseBlocked:      {model.PhaseDesign, model.PhaseDesignReview, model.PhaseCode, model.PhaseReview, model.PhaseTest, model.PhaseDeepReview, model.PhaseAccept},
+	model.PhaseAttention:    {model.PhaseDesign, model.PhaseCode},
+}
+
+func CanTransition(from, to model.Phase) bool {
+	if from == model.PhaseDone {
+		return false
+	}
+	if to == model.PhaseBlocked || to == model.PhaseAttention {
+		return true
+	}
+	for _, allowed := range transitions[from] {
+		if allowed == to {
+			return true
+		}
+	}
+	return false
+}
+
+func Transition(current model.State, to model.Phase) (model.State, error) {
+	if !CanTransition(current.Phase, to) {
+		return current, fmt.Errorf("invalid transition %s -> %s", current.Phase, to)
+	}
+	if to == model.PhaseAmend {
+		current.Round++
+		if current.MaxRounds > 0 && current.Round > current.MaxRounds {
+			to = model.PhaseAttention
+			current.Reason = "maximum amendment rounds reached"
+		}
+	}
+	if to == model.PhaseCode && current.Round == 0 {
+		current.Round = 1
+	}
+	current.Phase = to
+	current.Role = RoleForPhase(to)
+	current.Active = to != model.PhaseDone && to != model.PhasePending
+	current.UpdatedAt = time.Now().UTC()
+	return current, nil
+}
+
+func RoleForPhase(phase model.Phase) model.Role {
+	switch phase {
+	case model.PhaseDesign:
+		return model.RoleDesigner
+	case model.PhaseDesignReview:
+		return model.RoleDesignReviewer
+	case model.PhaseCode, model.PhaseAmend:
+		return model.RoleCoder
+	case model.PhaseReview:
+		return model.RoleReviewer
+	case model.PhaseTest:
+		return model.RoleTester
+	case model.PhaseDeepReview:
+		return model.RoleDeepReviewer
+	case model.PhaseAccept:
+		return model.RoleAcceptor
+	default:
+		return ""
+	}
+}
