@@ -41,6 +41,9 @@ func TestAllTemplatesRender(t *testing.T) {
 			if output == "" || !strings.Contains(output, "Configured Skills") {
 				t.Fatalf("incomplete prompt: %q", output)
 			}
+			if !strings.Contains(output, "Codebase Graph") {
+				t.Fatalf("codebase graph instructions missing: %q", output)
+			}
 		})
 	}
 }

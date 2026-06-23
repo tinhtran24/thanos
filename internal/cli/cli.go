@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/tinhtran/thanos/internal/codegraph"
 	"github.com/tinhtran/thanos/internal/model"
 	"github.com/tinhtran/thanos/internal/orchestrator"
 	"github.com/tinhtran/thanos/internal/prompts"
@@ -62,6 +63,8 @@ func Execute(ctx context.Context, args []string, version string, stdout, stderr 
 		return runPlugin(ctx, ws, args[1:], stdout, stderr)
 	case "runner":
 		return runRunner(ws, args[1:], stdout)
+	case "scan":
+		return runScan(ws, stdout)
 	default:
 		return fmt.Errorf("unknown command %q; run 'thanos help'", args[0])
 	}
@@ -99,10 +102,51 @@ func runInit(_ context.Context, ws *workspace.Workspace, args []string, stdout i
 			},
 		},
 	}
+	hasSource := codegraph.HasSource(ws.Root)
+	var graph modelGraph
+	if hasSource {
+		built, err := codegraph.Build(ws.Root)
+		if err != nil {
+			return fmt.Errorf("scan existing codebase: %w", err)
+		}
+		graph.value = built
+		graph.present = true
+	}
 	if err := ws.Init(config); err != nil {
 		return err
 	}
 	fmt.Fprintf(stdout, "Initialized Thanos workspace at %s\n", ws.DotDir())
+	if graph.present {
+		if err := codegraph.Save(graph.value, ws.DotDir()); err != nil {
+			return fmt.Errorf("save initial codebase graph: %w", err)
+		}
+		fmt.Fprintf(stdout, "Indexed codebase: %d files, %d symbols, %d relationships\n",
+			graph.value.Files, graph.value.Symbols, len(graph.value.Edges))
+	}
+	return nil
+}
+
+type modelGraph struct {
+	value   codegraph.Graph
+	present bool
+}
+
+func runScan(ws *workspace.Workspace, stdout io.Writer) error {
+	if _, err := ws.ReadConfig(); err != nil {
+		return fmt.Errorf("open Thanos workspace: %w", err)
+	}
+	graph, err := codegraph.Build(ws.Root)
+	if err != nil {
+		return err
+	}
+	if err := codegraph.Save(graph, ws.DotDir()); err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "Indexed codebase: %d files, %d symbols, %d relationships\n",
+		graph.Files, graph.Symbols, len(graph.Edges))
+	fmt.Fprintf(stdout, "Graph: %s\nSummary: %s\n",
+		filepath.Join(ws.DotDir(), "codebase", "graph.json"),
+		filepath.Join(ws.DotDir(), "codebase", "summary.md"))
 	return nil
 }
 
@@ -778,6 +822,7 @@ Usage:
   thanos plugin marketplace add claude OWNER/REPO
   thanos plugin install claude NAME@MARKETPLACE [--scope project]
   thanos runner add NAME [--command CMD] [--agent AGENT] [--skills-dir PATH]
+  thanos scan
   thanos version
 
 Initialization is network-free. Skills are installed explicitly through the

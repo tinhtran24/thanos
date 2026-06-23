@@ -46,6 +46,8 @@ kiểm tra artifact, khôi phục tiến trình và bước phê duyệt của c
   Gemini CLI hoặc executable tùy chỉnh.
 - **Khôi phục sau gián đoạn:** state, event, prompt và report được lưu trong
   `.thanos/`.
+- **Codebase graph cục bộ:** lập chỉ mục file, symbol, lời gọi hàm, import, test,
+  hub symbol và convention của repository.
 - **Review đối kháng:** review thông thường và deep review kiểm tra các nhóm lỗi
   khác nhau.
 - **Human-in-the-loop:** feature dừng ở `pending-review` cho đến khi người dùng
@@ -83,6 +85,13 @@ cd your-project
 thanos init --runner codex --runner-command codex
 ```
 
+Với project đã có source code, Thanos tự động tạo:
+
+```text
+.thanos/codebase/graph.json
+.thanos/codebase/summary.md
+```
+
 Tạo feature:
 
 ```bash
@@ -106,6 +115,24 @@ thanos done F001
 
 Nếu tiến trình bị ngắt, `thanos run` tiếp tục từ
 `.thanos/<feature-id>/state.json`.
+
+## Codebase Graph cục bộ cho AI Agent
+
+Codebase là cấu trúc, không chỉ là văn bản. Thanos lưu source file, ngôn ngữ,
+symbol, function call, import, quan hệ test, hub symbol và convention của
+repository.
+
+Mỗi role được yêu cầu đọc `.thanos/codebase/summary.md` trước khi khám phá source
+code. Graph đầy đủ cho máy đọc nằm tại `.thanos/codebase/graph.json`.
+
+Quét lại thủ công sau thay đổi lớn:
+
+```bash
+thanos scan
+```
+
+Graph cũng được tự động làm mới sau khi feature vượt qua acceptance. Toàn bộ dữ
+liệu ở local, không cần SaaS, API key hoặc upload source code.
 
 ## Các vai trò AI Agent
 
@@ -243,6 +270,7 @@ process bị lỗi có thể chạy lại từ phase đã được xác nhận g
 | `thanos transition` | Chuyển phase thủ công có kiểm tra |
 | `thanos done` | Phê duyệt feature đang chờ review |
 | `thanos doctor` | Kiểm tra executable của runner |
+| `thanos scan` | Tạo hoặc làm mới codebase graph cục bộ |
 | `thanos skill find` | Tìm Agent Skills |
 | `thanos skill add` | Cài và đăng ký skill từ Git hoặc local source |
 | `thanos runner add` | Thêm runner và đồng bộ skill hiện có |
@@ -283,11 +311,8 @@ make check
 ```
 
 ## Nguồn cảm hứng và tiêu chuẩn
-
 - Tích hợp Agent Skills qua [vercel-labs/skills](https://github.com/vercel-labs/skills)
 - Claude Code plugin qua [plugin system chính thức](https://code.claude.com/docs/en/discover-plugins)
-- Đồng bộ đa agent theo mô hình
-  [One Repo, Zero Copy-Paste](https://dev.to/opensite/how-to-sync-ai-coding-agent-skills-across-every-platform-one-repo-zero-copy-paste-ba0)
 
 ## Giấy phép
 

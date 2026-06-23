@@ -28,6 +28,41 @@ func TestRunInitIsNetworkFree(t *testing.T) {
 	}
 }
 
+func TestRunInitScansExistingProject(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte("package main\nfunc main() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ws := workspace.Open(root)
+	var output strings.Builder
+	if err := runInit(context.Background(), ws, nil, &output); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".thanos", "codebase", "graph.json")); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "Indexed codebase") {
+		t.Fatalf("output = %q", output.String())
+	}
+}
+
+func TestRunScanRefreshesGraph(t *testing.T) {
+	ws := initializedWorkspace(t)
+	if err := os.WriteFile(filepath.Join(ws.Root, "service.go"), []byte("package service\nfunc Run() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := runScan(ws, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(ws.DotDir(), "codebase", "summary.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "Run") {
+		t.Fatalf("summary = %s", data)
+	}
+}
+
 func TestRunSkillAddExecutesNpxAndRegistersDiscoveredSkill(t *testing.T) {
 	ws := initializedWorkspace(t)
 	restore := stubExternal(t, func(root, name string, args []string) error {

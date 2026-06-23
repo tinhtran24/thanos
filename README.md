@@ -47,6 +47,8 @@ approval.
   executable.
 - **Crash-resistant workflow:** every feature stores state, events, prompts, and
   reports under `.thanos/`.
+- **Local codebase graph:** indexes files, symbols, calls, imports, tests, hub
+  symbols, and repository conventions for every AI role.
 - **Adversarial code review:** normal review and deep review catch different
   classes of defects.
 - **Human approval:** completed AI work stops at `pending-review` until a human
@@ -86,6 +88,13 @@ cd your-project
 thanos init --runner codex --runner-command codex
 ```
 
+For an existing project, initialization automatically writes:
+
+```text
+.thanos/codebase/graph.json
+.thanos/codebase/summary.md
+```
+
 Create a feature:
 
 ```bash
@@ -108,6 +117,25 @@ thanos done F001
 ```
 
 Interrupted runs resume from `.thanos/<feature-id>/state.json`.
+
+## Local Codebase Graph for AI Agents
+
+A codebase is structure, not only text. Thanos records source files, programming
+languages, symbols, function calls, imports, test relationships, hub symbols,
+and detected repository conventions.
+
+Every role is instructed to read `.thanos/codebase/summary.md` before exploring
+source files. The complete machine-readable graph is stored in
+`.thanos/codebase/graph.json`.
+
+Refresh it manually after large external changes:
+
+```bash
+thanos scan
+```
+
+The graph is also refreshed automatically after successful feature acceptance.
+Everything remains local; no SaaS account, API key, or source upload is needed.
 
 ## Multi-Agent Development Roles
 
@@ -245,6 +273,7 @@ and a failed process can restart from the latest validated phase.
 | `thanos transition` | Apply a validated manual phase transition |
 | `thanos done` | Approve a pending feature |
 | `thanos doctor` | Check configured runner executables |
+| `thanos scan` | Build or refresh the local codebase graph |
 | `thanos skill find` | Search available Agent Skills |
 | `thanos skill add` | Install and register skills from Git or local sources |
 | `thanos runner add` | Register a runner and synchronize existing skills |
@@ -288,8 +317,6 @@ make check
 
 - Agent Skills integration through [vercel-labs/skills](https://github.com/vercel-labs/skills)
 - Claude Code plugins through the [official plugin system](https://code.claude.com/docs/en/discover-plugins)
-- Cross-agent synchronization inspired by
-  [One Repo, Zero Copy-Paste](https://dev.to/opensite/how-to-sync-ai-coding-agent-skills-across-every-platform-one-repo-zero-copy-paste-ba0)
 
 ## License
 

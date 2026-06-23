@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tinhtran/thanos/internal/codegraph"
 	"github.com/tinhtran/thanos/internal/model"
 	"github.com/tinhtran/thanos/internal/prompts"
 	"github.com/tinhtran/thanos/internal/runner"
@@ -119,6 +120,13 @@ func (o *Orchestrator) Run(ctx context.Context, featureID, runnerOverride string
 			err = o.executeRole(ctx, feature, config, current, runnerConfig)
 			if err == nil {
 				err = requireArtifacts(o.Workspace, feature.ID, "final-report.md", "retro-learnings.json")
+			}
+			if err == nil {
+				if graph, scanErr := codegraph.Build(o.Workspace.Root); scanErr != nil {
+					err = fmt.Errorf("refresh codebase graph: %w", scanErr)
+				} else if scanErr = codegraph.Save(graph, o.Workspace.DotDir()); scanErr != nil {
+					err = fmt.Errorf("save refreshed codebase graph: %w", scanErr)
+				}
 			}
 			if err == nil {
 				current, err = o.transition(current, model.PhasePending)

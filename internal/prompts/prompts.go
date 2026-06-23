@@ -26,6 +26,7 @@ type Data struct {
 	ReviewerCount int
 	Locale        string
 	LocaleName    string
+	CodebaseGraph string
 }
 
 type Profile struct {
@@ -37,6 +38,7 @@ func Render(role model.Role, data Data) (string, error) {
 	data.Locale = data.Config.Locale
 	data.LocaleName = localeName(data.Locale)
 	data.Skills = skillsForRole(data.Config.Skills, role)
+	data.CodebaseGraph = filepath.ToSlash(filepath.Join(".thanos", "codebase", "summary.md"))
 	if role == model.RoleTester {
 		profiles, err := loadProfiles()
 		if err != nil {
@@ -75,6 +77,8 @@ func Render(role model.Role, data Data) (string, error) {
 			fmt.Fprintf(&output, "- %s: %s\n", skill.Name, skill.Path)
 		}
 	}
+	output.WriteString("\n== Codebase Graph ==\n")
+	fmt.Fprintf(&output, "Read `%s` before exploring source files. It contains the local codebase map, hub symbols, relationships, and detected conventions. Use `.thanos/codebase/graph.json` for machine-readable edges.\n", data.CodebaseGraph)
 	return output.String(), nil
 }
 

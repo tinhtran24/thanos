@@ -24,6 +24,7 @@ with distinct strengths converge to conquer complexity.
 - Designer, Design Reviewer, Coder, Reviewer, Tester, Deep Reviewer, and Acceptor pipeline
 - Mini-Coder, Re-Verifier, Synthesizer, and Gate prompts for specialized workflows
 - File-based `.thanos/` protocol for auditability and crash recovery
+- Local codebase graph with symbols, calls, imports, tests, hubs, and conventions
 - Deterministic state machine and amendment round budget
 - Configurable runner commands; Codex is the default
 - Feature dependencies and short feature IDs such as `F001`
@@ -85,6 +86,9 @@ thanos done F001
 
 `thanos init` is network-free and does not install a hardcoded skill repository.
 Skills and plugins are explicit project-level operations.
+
+When source files already exist, initialization writes
+`.thanos/codebase/graph.json` and `.thanos/codebase/summary.md`.
 
 `thanos run` resumes from the phase stored in `.thanos/F001-.../state.json`.
 
@@ -157,6 +161,7 @@ kept separately so interrupted runs can resume without shared model context.
 | `thanos transition` | Perform a validated manual transition |
 | `thanos done` | Apply human approval |
 | `thanos doctor` | Validate configured runner executables |
+| `thanos scan` | Build or refresh the local codebase graph |
 | `thanos skill find` | Search the open agent-skill directory through `npx skills find` |
 | `thanos skill add` | Install a Git/local skill source and register discovered skills |
 | `thanos plugin marketplace add` | Add a runner-specific plugin marketplace |
@@ -239,6 +244,28 @@ Known mappings include Claude Code (`.claude/skills`) and Codex, Cursor, and
 Gemini (`.agents/skills`). Adding a runner links every skill already recorded in
 settings. Adding a new skill also synchronizes it to all configured runners.
 Existing non-symlink skill directories are never overwritten.
+
+## Codebase graph
+
+```bash
+thanos scan
+```
+
+The scanner ignores generated and dependency directories including `.git`,
+`.thanos`, `.sense`, `node_modules`, `vendor`, `dist`, and `build`. It extracts
+Go symbols and call relationships with the Go parser, plus lightweight symbol
+detection for TypeScript, JavaScript, and Python.
+
+Outputs:
+
+- `.thanos/codebase/graph.json` — nodes, relationships, language counts, and
+  detected conventions.
+- `.thanos/codebase/summary.md` — key symbols, hubs, repository statistics, and
+  conventions for agent cold start.
+
+Every role prompt points to this summary. The graph is generated automatically
+during initialization of an existing project and refreshed after successful
+feature acceptance.
 
 ## Safety model
 
