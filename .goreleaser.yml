@@ -1,0 +1,51 @@
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - main: ./cmd/thanos
+    binary: thanos
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+
+archives:
+  - formats:
+      - tar.gz
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  disable: true
+
+brews:
+  - repository:
+      owner: tinhtran24
+      name: homebrew-tap
+    homepage: "https://github.com/tinhtran24/thanos"
+    description: "LOOP AI - Design, Code, Review, Test"
+    license: "MIT"
+    skip_upload: true
+    install: |
+      bin.install "thanos"
+    test: |
+      system "#{bin}/thanos", "--version"
+
+release:
+  github:
+    owner: tinhtran24
+    name: thanos
+  draft: false
+  prerelease: auto
+  name_template: "v{{.Version}}"
