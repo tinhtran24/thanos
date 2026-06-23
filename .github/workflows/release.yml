@@ -1,0 +1,63 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  goreleaser:
+    name: Build & Publish Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+        with:
+          go-version-file: go.mod
+
+      - name: Extract release notes from CHANGELOG
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          sed -n "/^## \[${TAG}\]/,/^## \[/p" CHANGELOG.md | sed '1d;$d' > /tmp/release-notes.md
+          if [ ! -s /tmp/release-notes.md ]; then
+            echo "Release ${GITHUB_REF_NAME}" > /tmp/release-notes.md
+          fi
+          cat /tmp/release-notes.md
+
+      - uses: goreleaser/goreleaser-action@5daf1e915a5f0af01ddbcd89a43b8061ff4f1a89 # v7
+        with:
+          version: "~> v2"
+          args: release --clean --release-notes /tmp/release-notes.md
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update release notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "$GITHUB_REF_NAME" --notes-file /tmp/release-notes.md
+
+      - name: Push Homebrew formula
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+        run: |
+          FORMULA=dist/homebrew/thanos.rb
+          if [ ! -f "$FORMULA" ]; then
+            echo "::warning::Formula not found at $FORMULA"
+            exit 0
+          fi
+          CONTENT=$(base64 -w0 "$FORMULA")
+          SHA=$(gh api repos/tinhtran24/homebrew-tap/contents/thanos.rb --jq .sha 2>/dev/null || true)
+          ARGS=(--method PUT --field "message=thanos ${GITHUB_REF_NAME}" --field "content=$CONTENT")
+          if [ -n "$SHA" ]; then
+            ARGS+=(--field "sha=$SHA")
+          fi
+          gh api repos/tinhtran24/homebrew-tap/contents/thanos.rb "${ARGS[@]}"
