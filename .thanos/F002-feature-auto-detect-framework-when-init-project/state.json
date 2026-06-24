@@ -1,0 +1,12 @@
+{
+  "feature_id": "F002-feature-auto-detect-framework-when-init-project",
+  "phase": "coding",
+  "role": "coder",
+  "round": 6,
+  "max_rounds": 5,
+  "active": false,
+  "runner": "codex",
+  "created_at": "2026-06-23T08:13:55.859579Z",
+  "updated_at": "2026-06-24T04:21:06.662503Z",
+  "reason": "exit status 1"
+}

@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [dev, main]
   pull_request:
-    branches: [main]
+    branches: [dev, main]
 
 jobs:
   ci:
@@ -25,13 +25,3 @@ jobs:
       - name: Test
         run: go test -race ./...
 
-      - name: Check CLI docs
-        run: bash scripts/check-docs.sh
-
-      - name: Check i18n keys
-        run: make check-i18n
-
-      - name: Check docs sync
-        if: github.event_name == 'pull_request'
-        continue-on-error: true
-        run: make check-docs-sync

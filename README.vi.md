@@ -7,11 +7,21 @@ Go. Framework điều phối các AI coding agent chuyên biệt qua một quy t
 thuật phần mềm có kiểm soát:
 
 ```text
-Thiết kế → Duyệt thiết kế → Lập trình → Review → Kiểm thử → Deep Review → Nghiệm thu
-                                  ↑           │          │              │
-                                  └───────────┴──────────┴──────────────┘
-                                                   Sửa lỗi
+Lập kế hoạch ─▶ chia feature thành các phần thực thi có thứ tự (EC-1, EC-2, …)
+
+sau đó chạy LẦN LƯỢT từng phần đến khi hoàn tất rồi mới sang phần kế tiếp:
+
+  EC-n: Thiết kế → Duyệt thiết kế → Lập trình → Review → Kiểm thử → Deep Review
+                                       ↑           │          │            │
+                                       └───────────┴──────────┴────────────┘
+                                                     Sửa lỗi
+
+sau phần cuối cùng: Nghiệm thu → Human Review → Done
 ```
+
+Một bước lập kế hoạch chia feature thành các **execution chunk (EC)** có thứ tự.
+Thanos chạy EC-1 qua trọn chu trình, rồi EC-2, … — nên một feature lớn được giao
+thành chuỗi lát cắt nhỏ, review độc lập, thay vì một vòng lặp sửa lỗi dài.
 
 Thanos phù hợp khi một AI agent duy nhất không đủ đáng tin cậy. Thay vì để cùng
 một model tự thiết kế, viết code, review và phê duyệt kết quả của chính nó,
@@ -144,7 +154,8 @@ liệu ở local, không cần SaaS, API key hoặc upload source code.
 
 | Vai trò | Trách nhiệm | Output chính |
 |---|---|---|
-| Designer | Chuyển yêu cầu thành phạm vi triển khai cụ thể | Task brief, acceptance criteria, test strategy |
+| Planner | Chia feature thành các execution chunk (EC) có thứ tự | `execution-plan.yaml` |
+| Designer | Chuyển yêu cầu của một EC thành phạm vi triển khai cụ thể | Task brief, acceptance criteria, test strategy |
 | Design Reviewer | Phát hiện thiếu sót kiến trúc trước khi code | `design-review-report.md` |
 | Coder | Triển khai đúng task brief đã duyệt | Source code và `coder-report.md` |
 | Reviewer | Kiểm tra correctness, security, scope và project rules | `review-report.md` |
@@ -154,6 +165,27 @@ liệu ở local, không cần SaaS, API key hoặc upload source code.
 
 Thanos còn có prompt chuyên biệt cho Mini-Coder, Re-Verifier, Synthesizer và
 Evolution Gate.
+
+Khi feature có nhiều EC, artifact của mỗi phần nằm trong
+`.thanos/<feature-id>/ec-<n>/`. Nếu một role gặp quyết định mơ hồ, nó ghi
+`clarify.json` và run sẽ tạm dừng chờ người trả lời — trong TUI có popup để chọn,
+hoặc chạy `thanos clarify FEATURE_ID "<câu trả lời>"`. Nếu có
+`.thanos/coding-style.md`, nội dung sẽ được chèn vào prompt của designer/coder/reviewer.
+
+## Giao diện phiên làm việc
+
+Mặc định (`thanos` hoặc `thanos ui`) là một ứng dụng terminal lấy chat làm trung tâm:
+
+- **Bên trái** — hội thoại theo từng role cho feature đang chọn, kèm dải phase
+  (`planning → design → … → done`). Chọn và copy bubble bằng bàn phím/chuột; nhấn
+  `ctrl+s` để dùng bôi chọn văn bản gốc của terminal.
+- **Sidebar bên phải** — logo THANOS, cây **Feature → EC** bấm được (mỗi EC hiển
+  thị trạng thái), runner đang dùng và các MCP server.
+- **Ô lệnh** — gõ `/` để mở bảng lệnh đầy đủ; đính kèm tệp bằng cách dán đường dẫn
+  hoặc tham chiếu `@path` để truyền vào ngữ cảnh của agent.
+
+Phím cây: `↑↓` di chuyển, `→/←` vào/ra EC của feature, `enter` chạy, `x` xoá EC,
+`c` trả lời clarification, `n` tạo feature, `tab` đổi vùng.
 
 ## Cài Agent Skills từ GitHub
 
@@ -271,7 +303,11 @@ process bị lỗi có thể chạy lại từ phase đã được xác nhận g
 | `thanos init` | Khởi tạo workspace, không cần network |
 | `thanos new` | Tạo feature specification |
 | `thanos run` | Chạy hoặc tiếp tục multi-agent workflow |
+| `thanos continue` | Tiếp tục feature đang kẹt từ round lỗi gần nhất |
 | `thanos status` | Xem phase và round hiện tại |
+| `thanos plan ls\|add\|rm` | Liệt kê / thêm / xoá execution chunk (EC) của feature |
+| `thanos clarify` | Trả lời câu hỏi đang chờ và tiếp tục chạy |
+| `thanos ask "<prompt>"` | Gửi một prompt rời cho runner (headless, không qua pipeline) |
 | `thanos prompt` | Render prompt mà không chạy runner |
 | `thanos transition` | Chuyển phase thủ công có kiểm tra |
 | `thanos done` | Phê duyệt feature đang chờ review |

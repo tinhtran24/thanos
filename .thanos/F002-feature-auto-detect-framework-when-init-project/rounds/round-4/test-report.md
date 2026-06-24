@@ -1,0 +1,21 @@
+# Test Report — Round 4
+## Summary
+FAIL — 12/13 criteria met
+## Results
+| # | Criterion | Status | Evidence |
+|---|---|---|---|
+| AC-1 | `model.Project` has optional JSON field `framework`; one detected or overridden value is written to `.thanos/settings.json`, and an empty value omits the key. | PASS | `go test ./internal/cli -run 'TestRunInit.*Framework\|TestInitHelpIncludesFramework' -v` passed all 8 selected tests, including auto-detection, trimmed override, omitted empty value, and help. |
+| AC-2 | PHP detection returns `laravel` for exact Composer keys or root Laravel markers, and `wordpress` only for all three root WordPress marker directories. | PASS | Unit profile: `TestDetectFrameworkPHP` passed 9 cases and `TestDetectFrameworkMarkerTypes` passed. |
+| AC-3 | TypeScript detection maps exact root dependency keys to supported frameworks and rejects non-dependency, nested, case, and prefix evidence. | PASS | Unit profile: `TestDetectFrameworkTypeScript` passed all 10 cases, including scripts/value/case/prefix/root-only negatives and ambiguity. |
+| AC-4 | Go detection maps exact root `go.mod` requirements to Gin or Echo and rejects comments, non-require directives, imports, sums, and prefixes. | PASS | Unit profile: `TestDetectFrameworkGo` passed all 9 cases, including grouped/versioned Echo and replace/comment/other-file negatives. |
+| AC-5 | Python detection maps normalized supported declarations from specified root metadata and requirements locations while rejecting unsupported lines and aliases. | PASS | Unit profile: `TestDetectFrameworkPython` passed all 29 PEP 621, Poetry, PEP 735, requirements, normalization, syntax, alias, and ambiguity cases. |
+| AC-6 | Rust detection maps supported Cargo dependencies from specified root tables, including renamed dependencies, and rejects unsupported evidence. | PASS | Unit profile: `TestDetectFrameworkRust` passed all 13 cases, including renamed/workspace/target dependencies and boolean, numeric, array, value, nested, and ambiguity negatives. |
+| AC-7 | Language selection is trimmed and case-insensitive; unsupported, zero-match, and ambiguous results return empty. | PASS | `TestDetectFrameworkLanguageSelection` and `TestDetectFrameworkAmbiguity` both passed. |
+| AC-8 | Missing or malformed optional evidence is non-fatal; valid evidence remains usable; filesystem errors include path context. | PASS | `TestDetectFrameworkMalformedEvidence` passed for all 5 languages; `TestDetectFrameworkFilesystemErrors` passed all 4 read/root/stat/not-found cases. |
+| AC-9 | `runInit` applies final language before detection, handles framework overrides correctly, and does not create settings on detector errors. | PASS | Focused CLI run passed language override, trimmed override, whitespace fallback, empty omission, and detector-error/no-settings tests. |
+| AC-10 | Detection is root-only, read-only, network-free, subprocess-free, preserves existing detection, and does not change state-machine/orchestrator files. | FAIL | Behavioral tests passed: `TestRunInitFrameworkDetectionDoesNotExecuteCommands` and `TestRunInitDetectsTypeScriptCommandsAndWorkspace`. Import guard passed with no `net`, `net/http`, or `os/exec` match. Required isolation guard failed: `git diff --exit-code -- internal/state internal/orchestrator` returned 1 and showed changes in `internal/orchestrator/orchestrator.go` adding `internal/ui` output handling. |
+| AC-11 | CLI help and both documentation files fully describe the framework feature and guarantees. | PASS | Help output contains `--framework`; `TestFrameworkDocumentation` passed independently for `README.md` and `Technical.md`. |
+| AC-12 | Focused detector and CLI tests pass under the unit profile. | PASS | `go test ./internal/project -run Framework -v` and `go test ./internal/cli -run 'Init.*Framework\|InitHelpIncludesFramework' -v` both exited 0. |
+| AC-13 | Full repository verification passes with no formatting or module-file inconsistency. | PASS | Gofmt check exited 0. `go mod tidy` exited 0 and SHA-256 hashes of `go.mod`/`go.sum` were unchanged. With isolated writable cache, `go build ./...`, `go vet ./...`, and `go test ./...` all exited 0; all repository packages passed. The exact unmodified commands were also attempted but the managed sandbox denied access to `~/Library/Caches/go-build`. |
+## Verdict
+FAIL

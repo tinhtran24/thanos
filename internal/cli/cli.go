@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -11,45 +10,60 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/tinhtran/thanos/internal/codegraph"
+	"github.com/tinhtran/thanos/internal/featuregraph"
 	"github.com/tinhtran/thanos/internal/model"
 	"github.com/tinhtran/thanos/internal/orchestrator"
 	"github.com/tinhtran/thanos/internal/project"
 	"github.com/tinhtran/thanos/internal/prompts"
 	"github.com/tinhtran/thanos/internal/runner"
 	"github.com/tinhtran/thanos/internal/state"
+	"github.com/tinhtran/thanos/internal/tui"
+	"github.com/tinhtran/thanos/internal/ui"
 	"github.com/tinhtran/thanos/internal/workspace"
 )
 
-var runExternal = runExternalCommand
+var (
+	runExternal     = runExternalCommand
+	detectFramework = project.DetectFramework
+)
 
 func Execute(ctx context.Context, args []string, version string, stdout, stderr io.Writer) error {
-	if len(args) == 0 {
-		printHelp(stdout)
-		return nil
-	}
 	root, err := os.Getwd()
 	if err != nil {
 		return err
 	}
 	ws := workspace.Open(root)
+	if len(args) == 0 {
+		if _, err := os.Stat(ws.ConfigPath()); err == nil {
+			return tui.Run(ctx, ws, version, os.Stdin, stdout)
+		}
+		printHelp(stdout)
+		return nil
+	}
 	switch args[0] {
 	case "help", "-h", "--help":
 		printHelp(stdout)
 		return nil
 	case "version", "--version":
-		fmt.Fprintln(stdout, version)
+		ui.Line(stdout, version)
 		return nil
 	case "init":
 		return runInit(ctx, ws, args[1:], stdout)
 	case "new":
 		return runNew(ws, args[1:], stdout)
+	case "bugfix":
+		return runBugfix(ws, args[1:], stdout)
 	case "status":
 		return runStatus(ws, stdout)
 	case "run":
 		return runFeature(ctx, ws, args[1:], stdout, stderr)
+	case "continue":
+		return runContinue(ctx, ws, args[1:], stdout, stderr)
 	case "prompt":
 		return runPrompt(ws, args[1:], stdout)
 	case "transition":
@@ -66,6 +80,20 @@ func Execute(ctx context.Context, args []string, version string, stdout, stderr 
 		return runRunner(ws, args[1:], stdout)
 	case "scan":
 		return runScan(ws, stdout)
+	case "ui":
+		return tui.Run(ctx, ws, version, os.Stdin, stdout)
+	case "lsp":
+		return runLSP(ws, args[1:], stdout)
+	case "mcp":
+		return runMCP(ws, args[1:], stdout)
+	case "memory":
+		return runMemory(ws, args[1:], stdout)
+	case "ask":
+		return runAsk(ctx, ws, args[1:], stdout, stderr)
+	case "plan":
+		return runPlan(ws, args[1:], stdout)
+	case "clarify":
+		return runClarify(ctx, ws, args[1:], stdout, stderr)
 	default:
 		return fmt.Errorf("unknown command %q; run 'thanos help'", args[0])
 	}
@@ -76,6 +104,7 @@ func runInit(_ context.Context, ws *workspace.Workspace, args []string, stdout i
 	flags.SetOutput(io.Discard)
 	name := flags.String("name", "", "project name override")
 	language := flags.String("language", "", "project language override")
+	framework := flags.String("framework", "", "project framework override")
 	runnerName := flags.String("runner", "codex", "default runner")
 	runnerCommand := flags.String("runner-command", "codex", "runner executable")
 	if err := flags.Parse(args); err != nil {
@@ -103,6 +132,13 @@ func runInit(_ context.Context, ws *workspace.Workspace, args []string, stdout i
 	if *language != "" {
 		detected.Language = *language
 	}
+	detected.Framework, err = detectFramework(ws.Root, detected.Language)
+	if err != nil {
+		return fmt.Errorf("detect framework: %w", err)
+	}
+	if override := strings.TrimSpace(*framework); override != "" {
+		detected.Framework = override
+	}
 	detected.Rules = []string{
 		"Keep role outputs isolated in .thanos.",
 		"Do not bypass the deterministic phase state machine.",
@@ -121,17 +157,28 @@ func runInit(_ context.Context, ws *workspace.Workspace, args []string, stdout i
 				SkillsDir: defaultSkillsDir(*runnerName),
 			},
 		},
+		LSP: detectedLSPs(detected.Language),
 	}
 	if err := ws.Init(config); err != nil {
 		return err
 	}
-	fmt.Fprintf(stdout, "Initialized Thanos workspace at %s\n", ws.DotDir())
+	if err := featuregraph.Save(ws.DotDir(), featuregraph.Graph{}); err != nil {
+		return fmt.Errorf("initialize feature memory: %w", err)
+	}
+	printExecLog(stdout, ui.ExecLogEntry{
+		Type: "write", Path: ws.DotDir(), Message: "Initialized Thanos workspace", Status: ui.Completed,
+	})
 	if graph.present {
 		if err := codegraph.Save(graph.value, ws.DotDir()); err != nil {
 			return fmt.Errorf("save initial codebase graph: %w", err)
 		}
-		fmt.Fprintf(stdout, "Indexed codebase: %d files, %d symbols, %d relationships\n",
-			graph.value.Files, graph.value.Symbols, len(graph.value.Edges))
+		printExecLog(stdout, ui.ExecLogEntry{
+			Type: "write",
+			Path: filepath.Join(ws.DotDir(), "codebase", "graph.json"),
+			Message: fmt.Sprintf("Indexed codebase: %d files, %d symbols, %d relationships",
+				graph.value.Files, graph.value.Symbols, len(graph.value.Edges)),
+			Status: ui.Completed,
+		})
 	}
 	return nil
 }
@@ -152,11 +199,35 @@ func runScan(ws *workspace.Workspace, stdout io.Writer) error {
 	if err := codegraph.Save(graph, ws.DotDir()); err != nil {
 		return err
 	}
-	fmt.Fprintf(stdout, "Indexed codebase: %d files, %d symbols, %d relationships\n",
-		graph.Files, graph.Symbols, len(graph.Edges))
-	fmt.Fprintf(stdout, "Graph: %s\nSummary: %s\n",
-		filepath.Join(ws.DotDir(), "codebase", "graph.json"),
-		filepath.Join(ws.DotDir(), "codebase", "summary.md"))
+	features, err := ws.ListFeatures()
+	if err != nil {
+		return err
+	}
+	if err := featuregraph.Rebuild(ws.DotDir(), features); err != nil {
+		return err
+	}
+	for _, feature := range features {
+		if err := featuregraph.UpdateFromArtifacts(ws.DotDir(), feature); err != nil {
+			return err
+		}
+	}
+	printExecLog(stdout, ui.ExecLogEntry{
+		Type: "write",
+		Path: filepath.Join(ws.DotDir(), "codebase", "graph.json"),
+		Message: fmt.Sprintf("Indexed codebase: %d files, %d symbols, %d relationships",
+			graph.Files, graph.Symbols, len(graph.Edges)),
+		Status: ui.Completed,
+	})
+	printExecLog(stdout, ui.ExecLogEntry{
+		Type:    "write",
+		Path:    filepath.Join(ws.DotDir(), "codebase", "summary.md"),
+		Message: "Codebase summary completed",
+		Status:  ui.Completed,
+	})
+	printExecLog(stdout, ui.ExecLogEntry{
+		Type: "write", Path: featuregraph.PathFor(ws.DotDir()),
+		Message: "Refreshed feature memory", Status: ui.Completed,
+	})
 	return nil
 }
 
@@ -165,10 +236,24 @@ func runNew(ws *workspace.Workspace, args []string, stdout io.Writer) error {
 	flags.SetOutput(io.Discard)
 	description := flags.String("description", "", "feature description")
 	acceptance := flags.String("acceptance", "", "semicolon-separated acceptance criteria")
+	featureType := flags.String("type", "feature", "feature type")
+	parent := flags.String("parent", "", "parent feature for a bugfix")
+	rules := flags.String("rules", "", "semicolon-separated business rules")
+	decisions := flags.String("decisions", "", "semicolon-separated architectural decisions")
+	scope := flags.String("scope", "", "semicolon-separated affected paths or scope")
+	related := flags.String("related", "", "comma-separated related feature IDs")
+	dependencies := flags.String("depends-on", "", "comma-separated dependency feature IDs")
 	priority := flags.String("priority", "medium", "priority")
 	args, err := intersperseFlags(args, map[string]bool{
 		"--description": true,
 		"--acceptance":  true,
+		"--type":        true,
+		"--parent":      true,
+		"--rules":       true,
+		"--decisions":   true,
+		"--scope":       true,
+		"--related":     true,
+		"--depends-on":  true,
 		"--priority":    true,
 	})
 	if err != nil {
@@ -181,20 +266,59 @@ func runNew(ws *workspace.Workspace, args []string, stdout io.Writer) error {
 		return errors.New("usage: thanos new \"Feature title\" [--description text]")
 	}
 	title := strings.Join(flags.Args(), " ")
+	if *featureType != "feature" && *featureType != "bugfix" {
+		return fmt.Errorf("unsupported feature type %q", *featureType)
+	}
+	parentID := ""
+	if strings.TrimSpace(*parent) != "" {
+		parentFeature, err := ws.LoadFeature(strings.TrimSpace(*parent))
+		if err != nil {
+			return fmt.Errorf("parent feature: %w", err)
+		}
+		parentID = parentFeature.ID
+		if err := featuregraph.Sync(ws.DotDir(), parentFeature); err != nil {
+			return fmt.Errorf("sync parent feature memory: %w", err)
+		}
+	}
+	if *featureType == "bugfix" && parentID == "" {
+		return errors.New("bugfix requires --parent FEATURE_ID")
+	}
 	id, err := ws.NextFeatureID(title)
 	if err != nil {
 		return err
 	}
 	criteria := splitList(*acceptance)
 	feature := model.Feature{
-		ID: id, Title: title, Description: *description, Acceptance: criteria,
+		ID: id, Title: title, Type: *featureType, Parent: parentID,
+		Description: *description, Acceptance: criteria, Rules: splitList(*rules),
+		Decisions: splitList(*decisions),
+		Scope:     splitList(*scope), Related: splitCSV(*related), Dependencies: splitCSV(*dependencies),
 		Priority: *priority, Status: "todo",
 	}
 	if err := ws.SaveFeature(feature); err != nil {
 		return err
 	}
-	fmt.Fprintf(stdout, "Created %s\n", id)
+	if err := featuregraph.Sync(ws.DotDir(), feature); err != nil {
+		return fmt.Errorf("save feature memory: %w", err)
+	}
+	message := "Created " + id
+	if parentID != "" {
+		message += " mapped to " + parentID
+	}
+	printExecLog(stdout, ui.ExecLogEntry{
+		Type: "write", Path: ws.FeaturePath(id), Message: message, Status: ui.Completed,
+	})
 	return nil
+}
+
+func runBugfix(ws *workspace.Workspace, args []string, stdout io.Writer) error {
+	if len(args) < 2 {
+		return errors.New("usage: thanos bugfix FEATURE_ID \"Bugfix title\" [options]")
+	}
+	parent := args[0]
+	bugfixArgs := append([]string{}, args[1:]...)
+	bugfixArgs = append(bugfixArgs, "--type", "bugfix", "--parent", parent)
+	return runNew(ws, bugfixArgs, stdout)
 }
 
 func runStatus(ws *workspace.Workspace, stdout io.Writer) error {
@@ -203,17 +327,24 @@ func runStatus(ws *workspace.Workspace, stdout io.Writer) error {
 		return err
 	}
 	if len(features) == 0 {
-		fmt.Fprintln(stdout, "No features.")
+		ui.Info(stdout, "No features.")
 		return nil
 	}
-	fmt.Fprintln(stdout, "ID\tSTATUS\tPHASE\tROUND\tTITLE")
+	rows := make([][]string, 0, len(features))
 	for _, feature := range features {
 		phase, round := "-", 0
 		if current, err := ws.ReadState(feature.ID); err == nil {
 			phase, round = string(current.Phase), current.Round
 		}
-		fmt.Fprintf(stdout, "%s\t%s\t%s\t%d\t%s\n", feature.ID, feature.Status, phase, round, feature.Title)
+		rows = append(rows, []string{
+			feature.ID,
+			feature.Status,
+			phase,
+			strconv.Itoa(round),
+			feature.Title,
+		})
 	}
+	ui.Block(stdout, ui.Table([]string{"ID", "STATUS", "PHASE", "ROUND", "TITLE"}, rows))
 	return nil
 }
 
@@ -235,6 +366,104 @@ func runFeature(ctx context.Context, ws *workspace.Workspace, args []string, std
 		Workspace: ws, Runner: runner.Subprocess{}, Stdout: stdout, Stderr: stderr,
 	}
 	return orch.Run(ctx, flags.Arg(0), *runnerName)
+}
+
+func runContinue(ctx context.Context, ws *workspace.Workspace, args []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("continue", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	runnerName := flags.String("runner", "", "runner override")
+	args, err := intersperseFlags(args, map[string]bool{"--runner": true})
+	if err != nil {
+		return err
+	}
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 1 {
+		return errors.New("usage: thanos continue FEATURE_ID [--runner name]")
+	}
+	featureID, err := prepareContinue(ws, flags.Arg(0), stdout)
+	if err != nil {
+		return err
+	}
+	orch := orchestrator.Orchestrator{
+		Workspace: ws, Runner: runner.Subprocess{}, Stdout: stdout, Stderr: stderr,
+	}
+	return orch.Run(ctx, featureID, *runnerName)
+}
+
+func prepareContinue(ws *workspace.Workspace, featureID string, stdout io.Writer) (string, error) {
+	feature, err := ws.LoadFeature(featureID)
+	if err != nil {
+		return "", err
+	}
+	current, err := ws.ReadState(feature.ID)
+	if err != nil {
+		return "", err
+	}
+	failedRound, reportPath, err := latestFailedRound(ws, feature.ID, current)
+	if err != nil {
+		return "", err
+	}
+	current.Reason = ""
+	next, err := state.Transition(current, model.PhaseCode)
+	if err != nil {
+		return "", err
+	}
+	if err := ws.WriteState(next); err != nil {
+		return "", err
+	}
+	_ = ws.AppendEvent(model.Event{
+		Type:      "continue",
+		FeatureID: feature.ID,
+		Timestamp: time.Now().UTC(),
+		Phase:     next.Phase,
+		Role:      next.Role,
+		Round:     next.Round,
+		Data: map[string]any{
+			"from":          current.Phase,
+			"failed_report": reportPath,
+		},
+	})
+	printExecLog(stdout, ui.ExecLogEntry{
+		Type:    "read",
+		Path:    reportPath,
+		Message: fmt.Sprintf("Continuing failed round %d in coding round %d", failedRound, next.Round),
+		Status:  ui.Completed,
+	})
+	return feature.ID, nil
+}
+
+func latestFailedRound(ws *workspace.Workspace, featureID string, current model.State) (int, string, error) {
+	ecDir := ""
+	if current.ECTotal > 1 && current.ECIndex >= 1 {
+		ecDir = fmt.Sprintf("ec-%d", current.ECIndex)
+	}
+	reportNames := []string{"deep-review-report.md", "test-report.md", "review-report.md"}
+	for round := current.Round; round >= 1; round-- {
+		for _, reportName := range reportNames {
+			relative := filepath.Join(ecDir, "rounds", fmt.Sprintf("round-%d", round), reportName)
+			content, err := ws.ReadArtifact(featureID, relative)
+			if err != nil {
+				if errors.Is(err, os.ErrNotExist) {
+					continue
+				}
+				return 0, "", err
+			}
+			if reportVerdictFailed(content) {
+				return round, filepath.Join(ws.RuntimeDir(featureID), relative), nil
+			}
+		}
+	}
+	return 0, "", fmt.Errorf("%s has no failed round report to continue", featureID)
+}
+
+func reportVerdictFailed(content string) bool {
+	verdict := strings.ToUpper(content)
+	if index := strings.LastIndex(verdict, "VERDICT"); index >= 0 {
+		verdict = verdict[index:]
+	}
+	return strings.Contains(verdict, "FAIL")
 }
 
 func runPrompt(ws *workspace.Workspace, args []string, stdout io.Writer) error {
@@ -260,7 +489,7 @@ func runPrompt(ws *workspace.Workspace, args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	fmt.Fprint(stdout, prompt)
+	ui.Raw(stdout, prompt)
 	return nil
 }
 
@@ -287,7 +516,12 @@ func runTransition(ws *workspace.Workspace, args []string, stdout io.Writer) err
 	if err := ws.WriteState(next); err != nil {
 		return err
 	}
-	fmt.Fprintf(stdout, "%s: %s -> %s\n", feature.ID, current.Phase, next.Phase)
+	printExecLog(stdout, ui.ExecLogEntry{
+		Type:    "write",
+		Path:    filepath.Join(ws.DotDir(), feature.ID, "state.json"),
+		Message: fmt.Sprintf("%s: %s -> %s", feature.ID, current.Phase, next.Phase),
+		Status:  ui.Completed,
+	})
 	return nil
 }
 
@@ -317,7 +551,193 @@ func runDone(ws *workspace.Workspace, args []string, stdout io.Writer) error {
 	if err := ws.SaveFeature(feature); err != nil {
 		return err
 	}
-	fmt.Fprintf(stdout, "%s marked done\n", feature.ID)
+	if err := featuregraph.Sync(ws.DotDir(), feature); err != nil {
+		return err
+	}
+	printExecLog(stdout, ui.ExecLogEntry{
+		Type:    "write",
+		Path:    filepath.Join(ws.DotDir(), feature.ID, "state.json"),
+		Message: feature.ID + " marked done",
+		Status:  ui.Completed,
+	})
+	return nil
+}
+
+// runAsk sends a single ad-hoc prompt straight to the configured runner and
+// streams its output — a headless one-off, like `crush run`, with no pipeline.
+func runAsk(ctx context.Context, ws *workspace.Workspace, args []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("ask", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	runnerName := flags.String("runner", "", "runner override")
+	args, err := intersperseFlags(args, map[string]bool{"--runner": true})
+	if err != nil {
+		return err
+	}
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	prompt := strings.TrimSpace(strings.Join(flags.Args(), " "))
+	if prompt == "" {
+		return errors.New("usage: thanos ask \"<prompt>\" [--runner name]")
+	}
+	config, err := ws.ReadConfig()
+	if err != nil {
+		return err
+	}
+	name := *runnerName
+	if name == "" {
+		name = config.DefaultRunner
+	}
+	runnerConfig, ok := config.Runners[name]
+	if !ok {
+		return fmt.Errorf("runner %q is not configured", name)
+	}
+	return runner.Subprocess{}.Run(ctx, ws.Root, runnerConfig, prompt, stdout, stderr)
+}
+
+// runPlan lists, adds, or removes execution chunks (ECs) of a feature's plan.
+func runPlan(ws *workspace.Workspace, args []string, stdout io.Writer) error {
+	if len(args) < 2 {
+		return errors.New("usage: thanos plan ls|add|rm FEATURE_ID [args]")
+	}
+	sub := args[0]
+	feature, err := ws.LoadFeature(args[1])
+	if err != nil {
+		return err
+	}
+	plan, err := ws.ReadPlan(feature.ID)
+	if err != nil {
+		return err
+	}
+	switch sub {
+	case "ls":
+		active := plan.ActiveChunks()
+		if len(active) == 0 {
+			ui.Info(stdout, "No execution plan yet. Run the feature to let the planner create one.")
+			return nil
+		}
+		rows := make([][]string, 0, len(active))
+		for _, c := range active {
+			status := c.Status
+			if status == "" {
+				status = "todo"
+			}
+			rows = append(rows, []string{strconv.Itoa(c.Index), c.ID, status, c.Title})
+		}
+		ui.Block(stdout, ui.Table([]string{"#", "ID", "STATUS", "TITLE"}, rows))
+		return nil
+	case "rm":
+		if len(args) != 3 {
+			return errors.New("usage: thanos plan rm FEATURE_ID INDEX")
+		}
+		index, convErr := strconv.Atoi(args[2])
+		if convErr != nil {
+			return fmt.Errorf("invalid EC index %q", args[2])
+		}
+		found := false
+		for i := range plan.Chunks {
+			if plan.Chunks[i].Index == index {
+				plan.Chunks[i].Status = "removed"
+				found = true
+			}
+		}
+		if !found {
+			return fmt.Errorf("no EC with index %d", index)
+		}
+		if err := ws.WritePlan(feature.ID, plan); err != nil {
+			return err
+		}
+		printExecLog(stdout, ui.ExecLogEntry{
+			Type: "write", Path: ws.PlanPath(feature.ID),
+			Message: fmt.Sprintf("Removed EC-%d from %s", index, feature.ID), Status: ui.Completed,
+		})
+		return nil
+	case "add":
+		title := strings.TrimSpace(strings.Join(args[2:], " "))
+		if title == "" {
+			return errors.New("usage: thanos plan add FEATURE_ID \"<title>\"")
+		}
+		next := 0
+		for _, c := range plan.Chunks {
+			if c.Index > next {
+				next = c.Index
+			}
+		}
+		next++
+		plan.Chunks = append(plan.Chunks, model.ExecutionChunk{
+			Index: next, ID: fmt.Sprintf("%s-ec%d", feature.ID, next), Title: title, Status: "todo",
+		})
+		if err := ws.WritePlan(feature.ID, plan); err != nil {
+			return err
+		}
+		printExecLog(stdout, ui.ExecLogEntry{
+			Type: "write", Path: ws.PlanPath(feature.ID),
+			Message: fmt.Sprintf("Added EC-%d to %s", next, feature.ID), Status: ui.Completed,
+		})
+		return nil
+	default:
+		return errors.New("usage: thanos plan ls|add|rm FEATURE_ID [args]")
+	}
+}
+
+// runClarify answers a paused clarification and resumes the run. The engine
+// pauses (Active=false, Reason "needs clarification") when a role writes a
+// clarify.json; this writes the answer the role reads on resume.
+func runClarify(ctx context.Context, ws *workspace.Workspace, args []string, stdout, stderr io.Writer) error {
+	if len(args) < 2 {
+		return errors.New("usage: thanos clarify FEATURE_ID <answer>")
+	}
+	feature, err := ws.LoadFeature(args[0])
+	if err != nil {
+		return err
+	}
+	answer := strings.TrimSpace(strings.Join(args[1:], " "))
+	current, err := ws.ReadState(feature.ID)
+	if err != nil {
+		return err
+	}
+	name := clarifyAnswerName(current)
+	if err := ws.WriteArtifact(feature.ID, name, answer); err != nil {
+		return err
+	}
+	current.Active = true
+	current.Reason = ""
+	if err := ws.WriteState(current); err != nil {
+		return err
+	}
+	printExecLog(stdout, ui.ExecLogEntry{
+		Type: "write", Path: filepath.Join(ws.RuntimeDir(feature.ID), name),
+		Message: "Recorded clarification; resuming", Status: ui.Completed,
+	})
+	orch := orchestrator.Orchestrator{Workspace: ws, Runner: runner.Subprocess{}, Stdout: stdout, Stderr: stderr}
+	return orch.Run(ctx, feature.ID, "")
+}
+
+// clarifyAnswerName is the EC-scoped path of the clarification answer artifact.
+func clarifyAnswerName(s model.State) string {
+	if s.ECTotal > 1 && s.ECIndex >= 1 {
+		return fmt.Sprintf("ec-%d/clarify-answer.md", s.ECIndex)
+	}
+	return "clarify-answer.md"
+}
+
+func runMemory(ws *workspace.Workspace, args []string, stdout io.Writer) error {
+	if len(args) > 1 {
+		return errors.New("usage: thanos memory [FEATURE_ID]")
+	}
+	if len(args) == 0 {
+		graph, err := featuregraph.Load(ws.DotDir())
+		if err != nil {
+			return err
+		}
+		fmt.Fprint(stdout, featuregraph.Summary(graph))
+		return nil
+	}
+	feature, err := ws.LoadFeature(args[0])
+	if err != nil {
+		return err
+	}
+	fmt.Fprintln(stdout, featuregraph.ContextMarkdown(ws.DotDir(), feature.ID))
 	return nil
 }
 
@@ -336,8 +756,39 @@ func runDoctor(ws *workspace.Workspace, stdout io.Writer) error {
 		_, lookupErr := exec.LookPath(configured.Command)
 		checks = append(checks, check{Name: "runner:" + name, OK: lookupErr == nil, Detail: configured.Command})
 	}
-	data, _ := json.MarshalIndent(checks, "", "  ")
-	fmt.Fprintln(stdout, string(data))
+	for name, configured := range config.LSP {
+		if configured.Disabled {
+			continue
+		}
+		_, lookupErr := exec.LookPath(configured.Command)
+		checks = append(checks, check{Name: "lsp:" + name, OK: lookupErr == nil, Detail: configured.Command})
+	}
+	for name, configured := range config.MCP {
+		if configured.Disabled {
+			continue
+		}
+		ok, detail := true, configured.Type
+		switch configured.Type {
+		case "stdio":
+			_, lookupErr := exec.LookPath(configured.Command)
+			ok, detail = lookupErr == nil, configured.Command
+		case "http", "sse":
+			ok, detail = configured.URL != "", configured.URL
+		default:
+			ok, detail = false, "unsupported transport "+configured.Type
+		}
+		checks = append(checks, check{Name: "mcp:" + name, OK: ok, Detail: detail})
+	}
+	rows := make([][]string, 0, len(checks))
+	for _, item := range checks {
+		status := "Success"
+		if !item.OK {
+			status = "Failed"
+		}
+		rows = append(rows, []string{item.Name, status, item.Detail})
+	}
+	ui.Block(stdout, ui.Section("Environment Checks", nil))
+	ui.Block(stdout, ui.Table([]string{"CHECK", "STATUS", "DETAIL"}, rows))
 	for _, item := range checks {
 		if !item.OK {
 			return fmt.Errorf("doctor found unavailable runner %s", item.Name)
@@ -439,7 +890,12 @@ func runSkillAdd(ctx context.Context, ws *workspace.Workspace, args []string, st
 		scope = strings.Join(roles, ",")
 	}
 	for _, skill := range added {
-		fmt.Fprintf(stdout, "Registered skill %s (%s) for %s\n", skill.Name, skill.Path, scope)
+		printExecLog(stdout, ui.ExecLogEntry{
+			Type:    "write",
+			Path:    skill.Path,
+			Message: fmt.Sprintf("Registered skill %s for %s", skill.Name, scope),
+			Status:  ui.Completed,
+		})
 	}
 	return nil
 }
@@ -507,7 +963,102 @@ func runRunner(ws *workspace.Workspace, args []string, stdout io.Writer) error {
 	if err := ws.WriteConfig(config); err != nil {
 		return err
 	}
-	fmt.Fprintf(stdout, "Added runner %s; synchronized %d configured skills into %s\n", name, len(config.Skills), runnerConfig.SkillsDir)
+	printExecLog(stdout, ui.ExecLogEntry{
+		Type: "write",
+		Path: filepath.Join(ws.DotDir(), "settings.json"),
+		Message: fmt.Sprintf("Added runner %s; synchronized %d configured skills into %s",
+			name, len(config.Skills), runnerConfig.SkillsDir),
+		Status: ui.Completed,
+	})
+	return nil
+}
+
+func runLSP(ws *workspace.Workspace, args []string, stdout io.Writer) error {
+	if len(args) == 0 || args[0] != "add" {
+		return errors.New("usage: thanos lsp add NAME --command CMD [--args \"arg,arg\"]")
+	}
+	flags := flag.NewFlagSet("lsp add", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	command := flags.String("command", "", "language server executable")
+	commandArgs := flags.String("args", "", "comma-separated language server arguments")
+	parsed, err := intersperseFlags(args[1:], map[string]bool{"--command": true, "--args": true})
+	if err != nil {
+		return err
+	}
+	if err := flags.Parse(parsed); err != nil {
+		return err
+	}
+	if flags.NArg() != 1 || *command == "" {
+		return errors.New("usage: thanos lsp add NAME --command CMD [--args \"arg,arg\"]")
+	}
+	config, err := ws.ReadConfig()
+	if err != nil {
+		return err
+	}
+	if config.LSP == nil {
+		config.LSP = map[string]model.LSP{}
+	}
+	name := strings.ToLower(strings.TrimSpace(flags.Arg(0)))
+	config.LSP[name] = model.LSP{Command: *command, Args: splitCSV(*commandArgs)}
+	if err := ws.WriteConfig(config); err != nil {
+		return err
+	}
+	printExecLog(stdout, ui.ExecLogEntry{
+		Type: "write", Path: ws.ConfigPath(),
+		Message: fmt.Sprintf("Configured LSP %s (%s)", name, *command), Status: ui.Completed,
+	})
+	return nil
+}
+
+func runMCP(ws *workspace.Workspace, args []string, stdout io.Writer) error {
+	if len(args) == 0 || args[0] != "add" {
+		return errors.New("usage: thanos mcp add NAME --type stdio|http|sse [--command CMD] [--url URL]")
+	}
+	flags := flag.NewFlagSet("mcp add", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	transport := flags.String("type", "stdio", "MCP transport")
+	command := flags.String("command", "", "stdio server executable")
+	commandArgs := flags.String("args", "", "comma-separated stdio server arguments")
+	url := flags.String("url", "", "HTTP or SSE endpoint")
+	parsed, err := intersperseFlags(args[1:], map[string]bool{
+		"--type": true, "--command": true, "--args": true, "--url": true,
+	})
+	if err != nil {
+		return err
+	}
+	if err := flags.Parse(parsed); err != nil {
+		return err
+	}
+	if flags.NArg() != 1 {
+		return errors.New("usage: thanos mcp add NAME --type stdio|http|sse [--command CMD] [--url URL]")
+	}
+	if *transport != "stdio" && *transport != "http" && *transport != "sse" {
+		return fmt.Errorf("unsupported MCP transport %q", *transport)
+	}
+	if *transport == "stdio" && *command == "" {
+		return errors.New("stdio MCP requires --command")
+	}
+	if (*transport == "http" || *transport == "sse") && *url == "" {
+		return fmt.Errorf("%s MCP requires --url", *transport)
+	}
+	config, err := ws.ReadConfig()
+	if err != nil {
+		return err
+	}
+	if config.MCP == nil {
+		config.MCP = map[string]model.MCP{}
+	}
+	name := strings.ToLower(strings.TrimSpace(flags.Arg(0)))
+	config.MCP[name] = model.MCP{
+		Type: *transport, Command: *command, Args: splitCSV(*commandArgs), URL: *url,
+	}
+	if err := ws.WriteConfig(config); err != nil {
+		return err
+	}
+	printExecLog(stdout, ui.ExecLogEntry{
+		Type: "write", Path: ws.ConfigPath(),
+		Message: fmt.Sprintf("Configured MCP %s (%s)", name, *transport), Status: ui.Completed,
+	})
 	return nil
 }
 
@@ -679,15 +1230,30 @@ func appendUniquePlugin(items []model.Plugin, item model.Plugin) []model.Plugin 
 }
 
 func runExternalCommand(ctx context.Context, root string, stdout, stderr io.Writer, name string, args ...string) error {
+	commandText := strings.TrimSpace(name + " " + strings.Join(args, " "))
+	started := time.Now()
+	printExecLog(stdout, ui.ExecLogEntry{
+		Type: "exec", Command: commandText, Workdir: root, Status: ui.Running,
+	})
 	command := exec.CommandContext(ctx, name, args...)
 	command.Dir = root
 	command.Stdout = stdout
 	command.Stderr = stderr
 	command.Stdin = os.Stdin
 	if err := command.Run(); err != nil {
+		printExecLog(stderr, ui.ExecLogEntry{
+			Status: ui.Failed, DurationMs: time.Since(started).Milliseconds(),
+		})
 		return fmt.Errorf("%s %s: %w", name, strings.Join(args, " "), err)
 	}
+	printExecLog(stdout, ui.ExecLogEntry{
+		Status: ui.Succeeded, DurationMs: time.Since(started).Milliseconds(),
+	})
 	return nil
+}
+
+func printExecLog(output io.Writer, entry ui.ExecLogEntry) {
+	ui.Block(output, ui.ExecLog(entry))
 }
 
 func parseSkillRoles(value string) ([]string, error) {
@@ -753,6 +1319,34 @@ func splitList(value string) []string {
 	return result
 }
 
+func splitCSV(value string) []string {
+	var result []string
+	for _, item := range strings.Split(value, ",") {
+		if item = strings.TrimSpace(item); item != "" {
+			result = append(result, item)
+		}
+	}
+	return result
+}
+
+func detectedLSPs(language string) map[string]model.LSP {
+	candidates := map[string]model.LSP{
+		"go":         {Command: "gopls"},
+		"typescript": {Command: "typescript-language-server", Args: []string{"--stdio"}},
+		"javascript": {Command: "typescript-language-server", Args: []string{"--stdio"}},
+		"python":     {Command: "pyright-langserver", Args: []string{"--stdio"}},
+		"rust":       {Command: "rust-analyzer"},
+	}
+	candidate, ok := candidates[strings.ToLower(language)]
+	if !ok {
+		return nil
+	}
+	if _, err := exec.LookPath(candidate.Command); err != nil {
+		return nil
+	}
+	return map[string]model.LSP{strings.ToLower(language): candidate}
+}
+
 func defaultRunnerArgs(name string) []string {
 	switch strings.ToLower(name) {
 	case "codex":
@@ -816,12 +1410,16 @@ func intersperseFlags(args []string, valueFlags map[string]bool) ([]string, erro
 }
 
 func printHelp(output io.Writer) {
-	fmt.Fprintln(output, `Thanos — multi-role AI development framework
+	ui.Block(output, `Thanos — multi-role AI development framework
 
 Usage:
-  thanos init [--name NAME] [--runner codex] [--runner-command codex]
+  thanos                              Open the session TUI in an initialized workspace
+  thanos ui                           Open the session TUI
+  thanos init [--name NAME] [--language LANGUAGE] [--framework FRAMEWORK] [--runner codex] [--runner-command codex]
   thanos new "Feature title" [--description TEXT] [--acceptance "A; B"]
+  thanos bugfix FEATURE_ID "Bugfix title" [--description TEXT] [--rules "A; B"]
   thanos run FEATURE_ID [--runner NAME]
+  thanos continue FEATURE_ID [--runner NAME]
   thanos status
   thanos prompt FEATURE_ID designer|coder|reviewer|tester
   thanos transition FEATURE_ID PHASE
@@ -832,6 +1430,12 @@ Usage:
   thanos plugin marketplace add claude OWNER/REPO
   thanos plugin install claude NAME@MARKETPLACE [--scope project]
   thanos runner add NAME [--command CMD] [--agent AGENT] [--skills-dir PATH]
+  thanos lsp add NAME --command CMD [--args "arg,arg"]
+  thanos mcp add NAME --type stdio|http|sse [--command CMD] [--url URL]
+  thanos memory [FEATURE_ID]
+  thanos ask "<prompt>" [--runner NAME]
+  thanos plan ls|add|rm FEATURE_ID [args]
+  thanos clarify FEATURE_ID "<answer>"
   thanos scan
   thanos version
 

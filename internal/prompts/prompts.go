@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"embed"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"text/template"
 
+	"github.com/tinhtran/thanos/internal/featuregraph"
 	"github.com/tinhtran/thanos/internal/model"
 )
 
@@ -27,6 +29,17 @@ type Data struct {
 	Locale        string
 	LocaleName    string
 	CodebaseGraph string
+	FeatureMemory string
+
+	// Execution-chunk context. ExecutionChunk is the chunk the current role works
+	// on (nil during feature-level planning/accept). Plan is the full chunk list.
+	// ECPrefix is the artifact path prefix for the current chunk ("" for a single
+	// implicit chunk, "ec-<i>/" for a multi-chunk plan). CodingStyle is the
+	// optional project coding-style doc.
+	ExecutionChunk *model.ExecutionChunk
+	Plan           []model.ExecutionChunk
+	ECPrefix       string
+	CodingStyle    string
 }
 
 type Profile struct {
@@ -39,6 +52,7 @@ func Render(role model.Role, data Data) (string, error) {
 	data.LocaleName = localeName(data.Locale)
 	data.Skills = skillsForRole(data.Config.Skills, role)
 	data.CodebaseGraph = filepath.ToSlash(filepath.Join(".thanos", "codebase", "summary.md"))
+	data.FeatureMemory = featuregraph.ContextMarkdown(filepath.Join(data.Root, ".thanos"), data.Feature.ID)
 	if role == model.RoleTester {
 		profiles, err := loadProfiles()
 		if err != nil {
@@ -77,8 +91,41 @@ func Render(role model.Role, data Data) (string, error) {
 			fmt.Fprintf(&output, "- %s: %s\n", skill.Name, skill.Path)
 		}
 	}
+	if len(data.Config.LSP) > 0 {
+		output.WriteString("\n== Language Servers ==\n")
+		output.WriteString("Use diagnostics, definitions, references, and symbol context from these configured language servers when your runner exposes LSP tools:\n")
+		for name, server := range data.Config.LSP {
+			if !server.Disabled {
+				fmt.Fprintf(&output, "- %s: %s %s\n", name, server.Command, strings.Join(server.Args, " "))
+			}
+		}
+	}
+	if len(data.Config.MCP) > 0 {
+		output.WriteString("\n== MCP Servers ==\n")
+		output.WriteString("These project MCP capabilities are registered. Use matching runner-native MCP tools when available:\n")
+		for name, server := range data.Config.MCP {
+			if !server.Disabled {
+				fmt.Fprintf(&output, "- %s: %s\n", name, server.Type)
+			}
+		}
+	}
+	output.WriteString("\n== Persistent Feature Memory ==\n")
+	output.WriteString("Use this impact map before planning or changing code. Treat inherited business rules as invariants unless the task explicitly changes them.\n")
+	output.WriteString(data.FeatureMemory)
+	output.WriteString("\n")
 	output.WriteString("\n== Codebase Graph ==\n")
 	fmt.Fprintf(&output, "Read `%s` before exploring source files. It contains the local codebase map, hub symbols, relationships, and detected conventions. Use `.thanos/codebase/graph.json` for machine-readable edges.\n", data.CodebaseGraph)
+
+	// User-attached context (files/@-refs). The TUI writes the manifest before a
+	// run; reference it (EC-level overrides feature-level) when present.
+	for _, rel := range []string{filepath.Join(data.ECPrefix, "context", "attachments.md"), filepath.Join("context", "attachments.md")} {
+		abs := filepath.Join(data.Root, ".thanos", data.Feature.ID, rel)
+		if _, err := os.Stat(abs); err == nil {
+			output.WriteString("\n== Attached context ==\n")
+			fmt.Fprintf(&output, "The user attached files and notes for this task. Read `.thanos/%s` and use them as primary context.\n", filepath.ToSlash(filepath.Join(data.Feature.ID, rel)))
+			break
+		}
+	}
 	return output.String(), nil
 }
 

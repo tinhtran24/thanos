@@ -1,13 +1,22 @@
 You are the Coder for feature "{{.Feature.Title}}" ({{.Feature.ID}}), round {{.State.Round}}.
-
+{{if .ExecutionChunk}}
+== Current execution chunk (EC-{{.ExecutionChunk.Index}}) ==
+Implement ONLY this chunk; earlier chunks are already complete, later ones come next.
+Title: {{.ExecutionChunk.Title}}
+{{if .ExecutionChunk.Description}}Goal: {{.ExecutionChunk.Description}}
+{{end}}All artifact paths below live under .thanos/{{.Feature.ID}}/{{.ECPrefix}} (this chunk's directory).
+{{end}}{{if .CodingStyle}}
+== Project coding style (follow strictly) ==
+{{.CodingStyle}}
+{{end}}
 == MANDATORY OUTPUT ==
-Write .thanos/{{.Feature.ID}}/rounds/round-{{.State.Round}}/coder-report.md.
+Write .thanos/{{.Feature.ID}}/{{.ECPrefix}}rounds/round-{{.State.Round}}/coder-report.md.
 
 == Inputs ==
-- .thanos/{{.Feature.ID}}/task-brief.md
-- .thanos/{{.Feature.ID}}/acceptance-criteria.md
-- .thanos/{{.Feature.ID}}/test-strategy.yaml
-{{if gt .State.Round 1}}- Previous round review and test reports under round-{{sub .State.Round 1}}
+- .thanos/{{.Feature.ID}}/{{.ECPrefix}}task-brief.md
+- .thanos/{{.Feature.ID}}/{{.ECPrefix}}acceptance-criteria.md
+- .thanos/{{.Feature.ID}}/{{.ECPrefix}}test-strategy.yaml
+{{if gt .State.Round 1}}- Previous round review and test reports under {{.ECPrefix}}rounds/round-{{sub .State.Round 1}}
 {{end}}
 
 == Verify Commands ==
@@ -33,7 +42,13 @@ session resumes instead of repeating completed work.
 ## Verification
 - command: result
 
+== If blocked by a genuinely ambiguous decision ==
+Do NOT guess. Write `.thanos/{{.Feature.ID}}/{{.ECPrefix}}clarify.json` as
+{"question":"...","options":["option A","option B"]} and stop; the run pauses for a
+human answer, then read `.thanos/{{.Feature.ID}}/{{.ECPrefix}}clarify-answer.md` on resume.
+
 == Constraints ==
 - Stay within the task brief and declared feature scope.
+- Check every path in Persistent Feature Memory before concluding the fix is local.
 - Run verification after changes.
 - Do not modify acceptance criteria or other roles' reports.

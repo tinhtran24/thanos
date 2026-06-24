@@ -7,11 +7,22 @@ It orchestrates specialized AI coding agents across a deterministic software
 engineering workflow:
 
 ```text
-Design → Design Review → Code → Review → Test → Deep Review → Accept
-                            ↑        │       │          │
-                            └────────┴───────┴──────────┘
-                                      Amend
+Plan ─▶ split the feature into ordered execution chunks (EC-1, EC-2, …)
+
+then run EACH chunk to completion before the next one starts:
+
+  EC-n: Design → Design Review → Code → Review → Test → Deep Review
+                                   ↑        │       │          │
+                                   └────────┴───────┴──────────┘
+                                             Amend
+
+after the last chunk: Accept → Human Review → Done
 ```
+
+A planning step first breaks a feature into ordered **execution chunks (ECs)**.
+Thanos drives EC-1 through the full cycle, then EC-2, and so on — so a large
+feature ships as a sequence of small, independently reviewed slices instead of
+one cycle that thrashes in the amend loop.
 
 Use Thanos when one AI agent is not enough. Instead of asking the same model to
 design, implement, review, and approve its own work, Thanos assigns each phase
@@ -21,6 +32,11 @@ quality gates.
 Thanos works with Codex, Claude Code, Cursor, Gemini CLI, and custom command-line
 AI runners. It also installs Agent Skills from GitHub, synchronizes skills
 between runners, and manages Claude Code plugin marketplaces.
+
+The default project experience is a full-screen terminal UI built with Bubble
+Tea and Lip Gloss. It keeps Thanos's deterministic phase graph, role isolation,
+evidence gates, and human approval while presenting each feature as a resumable
+work session.
 
 ## Why Thanos?
 
@@ -45,6 +61,20 @@ approval.
   are enforced by Go code instead of prompts.
 - **AI runner agnostic:** use Codex, Claude Code, Cursor, Gemini CLI, or a custom
   executable.
+- **Session terminal UI:** browse, create, run, resume, and approve project work
+  without leaving the terminal.
+- **Mid-session runner switching:** change the selected LLM runner while
+  preserving the specification, artifacts, event history, phase, and round.
+- **LSP capability registry:** detect or register project language servers for
+  runner context and health checks.
+- **MCP capability registry:** configure `stdio`, `http`, and `sse` servers at
+  project scope and expose them to compatible runners.
+- **Persistent feature memory:** map business rules, architectural decisions,
+  dependencies, related features, and affected code paths across sessions.
+- **Impact-aware bugfixes:** attach a bugfix to its parent feature so every role
+  receives the complete known cross-layer impact before changing code.
+- **Portable Go binary:** release targets cover macOS, Linux, Windows,
+  Android terminals, FreeBSD, OpenBSD, and NetBSD.
 - **Crash-resistant workflow:** every feature stores state, events, prompts, and
   reports under `.thanos/`.
 - **Local codebase graph:** indexes files, symbols, calls, imports, tests, hub
@@ -94,6 +124,16 @@ cd your-project
 thanos init --runner codex --runner-command codex
 ```
 
+Open the session UI:
+
+```bash
+thanos
+# or: thanos ui
+```
+
+Key bindings: `↑/↓` select, `enter` run or resume, `m` switch runner, `n`
+create a session, `d` approve, `r` refresh, and `q` quit.
+
 For an existing project, initialization automatically writes:
 
 ```text
@@ -124,6 +164,92 @@ thanos done F001
 
 Interrupted runs resume from `.thanos/<feature-id>/state.json`.
 
+### Framework detection during init
+
+`thanos init` stores a single canonical value in `project.framework` inside
+`.thanos/settings.json`. Use `--framework VALUE` to supply an explicit value;
+surrounding whitespace is trimmed. The supported auto-detected values are
+`wordpress`, `laravel`, `nextjs`, `nestjs`, `angular`, `nuxt`, `gin`, `echo`,
+`django`, `flask`, `fastapi`, `actix-web`, `axum`, and `rocket`.
+
+Detection uses only root evidence for the final selected language, after any
+`--language` override:
+
+- PHP: `composer.json`, or the `artisan` and `bootstrap/app.php` Laravel
+  markers, or the `wp-admin`, `wp-includes`, and `wp-content` WordPress
+  directories.
+- TypeScript: `package.json`.
+- Go: `go.mod`.
+- Python: `pyproject.toml` and root `requirements*.txt` files.
+- Rust: `Cargo.toml`.
+
+If evidence identifies multiple supported frameworks, detection is ambiguous
+and writes no framework. An empty framework is omitted from settings. Detection
+is local, read-only, and network-free; it runs no package manager and executes
+no project command.
+
+## Persistent feature memory and bugfix mapping
+
+Create features with durable rules and known scope:
+
+```bash
+thanos new "Password policy" \
+  --rules "Passwords require at least 12 characters;Registration and reset share the same policy" \
+  --scope "internal/auth/password.go;web/auth/password.ts;docs/security.md"
+```
+
+Map a bugfix to that feature:
+
+```bash
+thanos bugfix F001 "Password reset accepts short passwords" \
+  --description "Reset validation does not enforce the shared password policy." \
+  --acceptance "Registration, reset, and account settings enforce the same minimum"
+```
+
+Before any role runs, Thanos resolves:
+
+- The parent feature and connected dependencies or related features.
+- Stored business rules and acceptance invariants.
+- Architectural decisions learned during feature acceptance.
+- Explicitly declared paths and files recorded by prior coder reports.
+- Neighboring callers and callees inferred from the local code graph.
+- Tests, frontend files, contracts, and documentation associated with those
+  paths.
+
+Inspect memory directly:
+
+```bash
+thanos memory
+thanos memory F002
+```
+
+Accepted features produce `.thanos/<feature-id>/feature-memory.json`. Thanos
+merges it into `.thanos/memory/feature-graph.json` and injects the resolved
+impact map into Designer, Coder, Reviewer, Tester, Deep Reviewer, and Acceptor
+prompts.
+
+## LSP and MCP capabilities
+
+Thanos records a matching language server during `init` when the executable is
+already installed. Servers can also be registered explicitly:
+
+```bash
+thanos lsp add go --command gopls
+thanos lsp add typescript --command typescript-language-server --args "--stdio"
+```
+
+Register MCP servers with `stdio`, `http`, or `sse` transport:
+
+```bash
+thanos mcp add filesystem --type stdio --command node --args "/path/to/server.js"
+thanos mcp add github --type http --url https://api.githubcopilot.com/mcp/
+thanos mcp add events --type sse --url https://example.com/mcp/sse
+```
+
+`thanos doctor` validates runner, LSP, and MCP configuration. Registered
+capabilities are included in role prompts; the selected runner must expose the
+matching native LSP or MCP tools to execute them.
+
 ## Local Codebase Graph for AI Agents
 
 A codebase is structure, not only text. Thanos records source files, programming
@@ -147,7 +273,8 @@ Everything remains local; no SaaS account, API key, or source upload is needed.
 
 | Role | Responsibility | Main output |
 |---|---|---|
-| Designer | Convert requirements into implementation-ready scope | `task-brief.md`, acceptance criteria, test strategy |
+| Planner | Split the feature into ordered execution chunks (ECs) | `execution-plan.yaml` |
+| Designer | Convert one chunk's requirements into implementation-ready scope | `task-brief.md`, acceptance criteria, test strategy |
 | Design Reviewer | Find architecture gaps before coding begins | `design-review-report.md` |
 | Coder | Implement only the approved task brief | Source changes and `coder-report.md` |
 | Reviewer | Check correctness, scope, security, and project rules | `review-report.md` |
@@ -157,6 +284,32 @@ Everything remains local; no SaaS account, API key, or source upload is needed.
 
 Specialized prompts are also included for Mini-Coder fixes, re-verification,
 parallel review synthesis, and evolution value gating.
+
+Each chunk's artifacts live under `.thanos/<feature-id>/ec-<n>/` when a feature
+has more than one chunk (single-chunk features keep the flat layout). If a role
+hits a genuinely ambiguous decision it writes a `clarify.json` question and the
+run pauses for a human answer — in the TUI a popup lets you choose, or run
+`thanos clarify FEATURE_ID "<answer>"`. A project `.thanos/coding-style.md`, when
+present, is injected into the designer, coder, and reviewer prompts so generated
+code matches your conventions.
+
+## Working session UI
+
+The default experience (`thanos` or `thanos ui`) is a chat-first terminal app:
+
+- **Left** — the role-by-role agent conversation for the selected feature, with a
+  phase-flow strip (`planning → design → … → done`). Select bubbles with the
+  keyboard or mouse and copy them; press `ctrl+s` for native terminal text
+  selection.
+- **Right sidebar** — the THANOS logo, a clickable **Feature → EC tree** (each
+  chunk shows its status), the active model runner, and configured MCP servers.
+- **Command box** — type `/` for the full command palette (run, continue, new,
+  bugfix, runner, transition, prompt, status, scan, doctor, memory, skill,
+  plugin, lsp, mcp, find, copy, clear, help). Attach files by pasting a path or
+  referencing `@path`; they are passed to the agent as run context.
+
+Tree keys: `↑↓` move, `→/←` descend into / out of a feature's ECs, `enter` run,
+`x` remove an EC, `c` answer a clarification, `n` new feature, `tab` switch panes.
 
 ## Agent Skills from GitHub
 
@@ -256,6 +409,7 @@ operations in `.thanos/settings.json`.
     ├── design-review-report.md
     ├── final-report.md
     ├── retro-learnings.json
+    ├── feature-memory.json
     └── rounds/
         └── round-1/
             ├── coder-report.md
@@ -271,10 +425,16 @@ and a failed process can restart from the latest validated phase.
 
 | Command | Description |
 |---|---|
+| `thanos` / `thanos ui` | Open the project session TUI |
 | `thanos init` | Initialize a network-free Thanos workspace |
 | `thanos new` | Create a feature specification |
+| `thanos bugfix` | Create a bugfix mapped to an existing feature |
 | `thanos run` | Run or resume the multi-agent workflow |
+| `thanos continue` | Resume a stalled feature from its last failed round |
 | `thanos status` | Display feature phase and round status |
+| `thanos plan ls\|add\|rm` | List, add, or remove a feature's execution chunks (ECs) |
+| `thanos clarify` | Answer a paused clarification and resume the run |
+| `thanos ask "<prompt>"` | Send a one-off prompt to the runner (headless, no pipeline) |
 | `thanos prompt` | Render a role prompt without executing a runner |
 | `thanos transition` | Apply a validated manual phase transition |
 | `thanos done` | Approve a pending feature |
@@ -283,6 +443,9 @@ and a failed process can restart from the latest validated phase.
 | `thanos skill find` | Search available Agent Skills |
 | `thanos skill add` | Install and register skills from Git or local sources |
 | `thanos runner add` | Register a runner and synchronize existing skills |
+| `thanos lsp add` | Register a project language server |
+| `thanos mcp add` | Register a `stdio`, `http`, or `sse` MCP server |
+| `thanos memory` | Inspect the persistent project or feature impact graph |
 | `thanos plugin marketplace add` | Add a runner plugin marketplace |
 | `thanos plugin install` | Install and record a runner plugin |
 
