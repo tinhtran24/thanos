@@ -399,7 +399,8 @@ func prepareContinue(ws *workspace.Workspace, featureID string, stdout io.Writer
 	if err != nil {
 		return "", err
 	}
-	next, err := state.ResumeFailedRound(current, failedRound)
+	current.Reason = ""
+	next, err := state.Transition(current, model.PhaseCode)
 	if err != nil {
 		return "", err
 	}
@@ -421,7 +422,7 @@ func prepareContinue(ws *workspace.Workspace, featureID string, stdout io.Writer
 	printExecLog(stdout, ui.ExecLogEntry{
 		Type:    "read",
 		Path:    reportPath,
-		Message: fmt.Sprintf("Continuing failed round %d", failedRound),
+		Message: fmt.Sprintf("Continuing failed round %d in coding round %d", failedRound, next.Round),
 		Status:  ui.Completed,
 	})
 	return feature.ID, nil

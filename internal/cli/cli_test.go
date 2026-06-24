@@ -259,14 +259,49 @@ func TestPrepareContinueResumesLatestFailedRound(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if current.Phase != model.PhaseAmend || current.Role != model.RoleCoder || current.Round != 3 {
+	if current.Phase != model.PhaseCode || current.Role != model.RoleCoder || current.Round != 5 {
 		t.Fatalf("state = %+v", current)
 	}
 	if current.Reason != "" || !current.Active {
 		t.Fatalf("state metadata = %+v", current)
 	}
-	if !strings.Contains(output.String(), "Continuing failed round 3") {
+	if !strings.Contains(output.String(), "Continuing failed round 3 in coding round 5") {
 		t.Fatalf("output = %q", output.String())
+	}
+}
+
+func TestPrepareContinueUsesSanctionedTransition(t *testing.T) {
+	ws := initializedWorkspace(t)
+	feature := model.Feature{ID: "F002-test", Title: "Test", Status: "todo"}
+	if err := ws.SaveFeature(feature); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(ws.RuntimeDir(feature.ID), "rounds", "round-4"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	reportPath := filepath.Join(ws.RuntimeDir(feature.ID), "rounds", "round-4", "test-report.md")
+	if err := os.WriteFile(reportPath, []byte("## Verdict\nFAIL"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := ws.WriteState(model.State{
+		FeatureID: feature.ID,
+		Phase:     model.PhaseAttention,
+		Round:     5,
+		MaxRounds: 4,
+		Reason:    "maximum amendment rounds reached",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := prepareContinue(ws, feature.ID, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	current, err := ws.ReadState(feature.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Phase != model.PhaseCode || current.Role != model.RoleCoder || current.Round != 5 || current.MaxRounds != 4 {
+		t.Fatalf("state = %+v", current)
 	}
 }
 

@@ -84,3 +84,66 @@ func TestCycleRunnerPersistsSessionSelection(t *testing.T) {
 		t.Fatalf("runner = %q, want claude", got.Runner)
 	}
 }
+
+func TestArrowKeysMoveSessionSelection(t *testing.T) {
+	ws := workspace.Open(t.TempDir())
+	if err := ws.Init(model.Config{
+		DefaultRunner: "codex",
+		Runners: map[string]model.Runner{
+			"codex": {Command: "codex"},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, feature := range []model.Feature{
+		{ID: "F001-first", Title: "First", Status: "todo"},
+		{ID: "F002-second", Title: "Second", Status: "todo"},
+	} {
+		if err := ws.SaveFeature(feature); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ui, err := newModel(context.Background(), ws, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ui.Update(tea.KeyMsg{Type: tea.KeyDown})
+	if ui.cursor != 1 {
+		t.Fatalf("cursor = %d, want 1", ui.cursor)
+	}
+	ui.Update(tea.KeyMsg{Type: tea.KeyUp})
+	if ui.cursor != 0 {
+		t.Fatalf("cursor = %d, want 0", ui.cursor)
+	}
+	ui.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	if ui.cursor != 1 {
+		t.Fatalf("cursor = %d after numeric selection, want 1", ui.cursor)
+	}
+	ui.Update(tea.MouseMsg{
+		X: 2, Y: 3, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress,
+	})
+	if ui.cursor != 0 {
+		t.Fatalf("cursor = %d after mouse selection, want 0", ui.cursor)
+	}
+}
+
+func TestActivityWriterStreamsLiveAgentOutput(t *testing.T) {
+	updates := make(chan string, 1)
+	writer := &activityWriter{target: updates}
+	if _, err := writer.Write([]byte("\x1b[31mchecking files\x1b[0m\n")); err != nil {
+		t.Fatal(err)
+	}
+	update := <-updates
+
+	ui := &modelUI{
+		running:  true,
+		activity: make(chan string),
+		width:    100,
+		height:   30,
+	}
+	ui.Update(activityMsg(update))
+	if ui.lastOutput != "checking files\n" {
+		t.Fatalf("activity = %q", ui.lastOutput)
+	}
+}

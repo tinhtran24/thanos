@@ -5,3 +5,4 @@ acceptance:
     - PHP framework Wordpress, Laravel, Go framework Gin Echo, ...
 priority: medium
 status: todo
+runner: codex
