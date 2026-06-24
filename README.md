@@ -22,6 +22,11 @@ Thanos works with Codex, Claude Code, Cursor, Gemini CLI, and custom command-lin
 AI runners. It also installs Agent Skills from GitHub, synchronizes skills
 between runners, and manages Claude Code plugin marketplaces.
 
+The default project experience is a full-screen terminal UI built with Bubble
+Tea and Lip Gloss. It keeps Thanos's deterministic phase graph, role isolation,
+evidence gates, and human approval while presenting each feature as a resumable
+work session.
+
 ## Why Thanos?
 
 Single-agent AI coding is fast, but it creates predictable risks:
@@ -45,6 +50,20 @@ approval.
   are enforced by Go code instead of prompts.
 - **AI runner agnostic:** use Codex, Claude Code, Cursor, Gemini CLI, or a custom
   executable.
+- **Session terminal UI:** browse, create, run, resume, and approve project work
+  without leaving the terminal.
+- **Mid-session runner switching:** change the selected LLM runner while
+  preserving the specification, artifacts, event history, phase, and round.
+- **LSP capability registry:** detect or register project language servers for
+  runner context and health checks.
+- **MCP capability registry:** configure `stdio`, `http`, and `sse` servers at
+  project scope and expose them to compatible runners.
+- **Persistent feature memory:** map business rules, architectural decisions,
+  dependencies, related features, and affected code paths across sessions.
+- **Impact-aware bugfixes:** attach a bugfix to its parent feature so every role
+  receives the complete known cross-layer impact before changing code.
+- **Portable Go binary:** release targets cover macOS, Linux, Windows,
+  Android terminals, FreeBSD, OpenBSD, and NetBSD.
 - **Crash-resistant workflow:** every feature stores state, events, prompts, and
   reports under `.thanos/`.
 - **Local codebase graph:** indexes files, symbols, calls, imports, tests, hub
@@ -93,6 +112,16 @@ Initialize Thanos inside an existing software project:
 cd your-project
 thanos init --runner codex --runner-command codex
 ```
+
+Open the session UI:
+
+```bash
+thanos
+# or: thanos ui
+```
+
+Key bindings: `↑/↓` select, `enter` run or resume, `m` switch runner, `n`
+create a session, `d` approve, `r` refresh, and `q` quit.
 
 For an existing project, initialization automatically writes:
 
@@ -147,6 +176,68 @@ If evidence identifies multiple supported frameworks, detection is ambiguous
 and writes no framework. An empty framework is omitted from settings. Detection
 is local, read-only, and network-free; it runs no package manager and executes
 no project command.
+
+## Persistent feature memory and bugfix mapping
+
+Create features with durable rules and known scope:
+
+```bash
+thanos new "Password policy" \
+  --rules "Passwords require at least 12 characters;Registration and reset share the same policy" \
+  --scope "internal/auth/password.go;web/auth/password.ts;docs/security.md"
+```
+
+Map a bugfix to that feature:
+
+```bash
+thanos bugfix F001 "Password reset accepts short passwords" \
+  --description "Reset validation does not enforce the shared password policy." \
+  --acceptance "Registration, reset, and account settings enforce the same minimum"
+```
+
+Before any role runs, Thanos resolves:
+
+- The parent feature and connected dependencies or related features.
+- Stored business rules and acceptance invariants.
+- Architectural decisions learned during feature acceptance.
+- Explicitly declared paths and files recorded by prior coder reports.
+- Neighboring callers and callees inferred from the local code graph.
+- Tests, frontend files, contracts, and documentation associated with those
+  paths.
+
+Inspect memory directly:
+
+```bash
+thanos memory
+thanos memory F002
+```
+
+Accepted features produce `.thanos/<feature-id>/feature-memory.json`. Thanos
+merges it into `.thanos/memory/feature-graph.json` and injects the resolved
+impact map into Designer, Coder, Reviewer, Tester, Deep Reviewer, and Acceptor
+prompts.
+
+## LSP and MCP capabilities
+
+Thanos records a matching language server during `init` when the executable is
+already installed. Servers can also be registered explicitly:
+
+```bash
+thanos lsp add go --command gopls
+thanos lsp add typescript --command typescript-language-server --args "--stdio"
+```
+
+Register MCP servers with `stdio`, `http`, or `sse` transport:
+
+```bash
+thanos mcp add filesystem --type stdio --command node --args "/path/to/server.js"
+thanos mcp add github --type http --url https://api.githubcopilot.com/mcp/
+thanos mcp add events --type sse --url https://example.com/mcp/sse
+```
+
+`thanos doctor` validates runner, LSP, and MCP configuration. Registered
+capabilities are included in role prompts; the selected runner must expose the
+matching native LSP or MCP tools to execute them.
 
 ## Local Codebase Graph for AI Agents
 
@@ -280,6 +371,7 @@ operations in `.thanos/settings.json`.
     ├── design-review-report.md
     ├── final-report.md
     ├── retro-learnings.json
+    ├── feature-memory.json
     └── rounds/
         └── round-1/
             ├── coder-report.md
@@ -295,8 +387,10 @@ and a failed process can restart from the latest validated phase.
 
 | Command | Description |
 |---|---|
+| `thanos` / `thanos ui` | Open the project session TUI |
 | `thanos init` | Initialize a network-free Thanos workspace |
 | `thanos new` | Create a feature specification |
+| `thanos bugfix` | Create a bugfix mapped to an existing feature |
 | `thanos run` | Run or resume the multi-agent workflow |
 | `thanos status` | Display feature phase and round status |
 | `thanos prompt` | Render a role prompt without executing a runner |
@@ -307,6 +401,9 @@ and a failed process can restart from the latest validated phase.
 | `thanos skill find` | Search available Agent Skills |
 | `thanos skill add` | Install and register skills from Git or local sources |
 | `thanos runner add` | Register a runner and synchronize existing skills |
+| `thanos lsp add` | Register a project language server |
+| `thanos mcp add` | Register a `stdio`, `http`, or `sse` MCP server |
+| `thanos memory` | Inspect the persistent project or feature impact graph |
 | `thanos plugin marketplace add` | Add a runner plugin marketplace |
 | `thanos plugin install` | Install and record a runner plugin |
 

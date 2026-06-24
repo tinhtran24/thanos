@@ -11,6 +11,9 @@ Write them to disk; do not merely print their contents.
 == Feature ==
 ID: {{.Feature.ID}}
 Name: {{.Feature.Title}}
+Type: {{if .Feature.Type}}{{.Feature.Type}}{{else}}feature{{end}}
+{{if .Feature.Parent}}Parent feature: {{.Feature.Parent}}
+{{end}}
 Description: {{.Feature.Description}}
 {{if .Feature.Acceptance}}Requested acceptance:
 {{range .Feature.Acceptance}}- {{.}}
@@ -66,3 +69,5 @@ If design-review-report.md exists with FAIL, address every issue without discard
 - Do not modify source code.
 - Focus on what must be built and objectively verified.
 - Make the Coder's scope unambiguous.
+- For bugfixes, trace the parent feature's rules and every known impact path. Explicitly include
+  affected backend, frontend, contract, test, and documentation work or explain why each is not affected.

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/tinhtran/thanos/internal/featuregraph"
 	"github.com/tinhtran/thanos/internal/model"
 	"github.com/tinhtran/thanos/internal/workspace"
 )
@@ -474,6 +475,58 @@ func TestSkillAddSynchronizesExistingRunner(t *testing.T) {
 	target := filepath.Join(ws.Root, ".claude", "skills", "testing")
 	if info, err := os.Lstat(target); err != nil || info.Mode()&os.ModeSymlink == 0 {
 		t.Fatalf("synced target: info=%v err=%v", info, err)
+	}
+}
+
+func TestLSPAndMCPConfiguration(t *testing.T) {
+	ws := initializedWorkspace(t)
+	if err := runLSP(ws, []string{"add", "go", "--command", "gopls"}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if err := runMCP(ws, []string{
+		"add", "github", "--type", "http", "--url", "https://example.test/mcp",
+	}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	config, err := ws.ReadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.LSP["go"].Command != "gopls" {
+		t.Fatalf("lsp = %+v", config.LSP)
+	}
+	if config.MCP["github"].Type != "http" || config.MCP["github"].URL != "https://example.test/mcp" {
+		t.Fatalf("mcp = %+v", config.MCP)
+	}
+}
+
+func TestBugfixMapsToParentFeatureMemory(t *testing.T) {
+	ws := initializedWorkspace(t)
+	parent := model.Feature{
+		ID: "F001-password-policy", Title: "Password policy", Type: "feature",
+		Status: "done", Rules: []string{"Minimum length is 12"},
+	}
+	if err := ws.SaveFeature(parent); err != nil {
+		t.Fatal(err)
+	}
+	if err := featuregraph.Sync(ws.DotDir(), parent); err != nil {
+		t.Fatal(err)
+	}
+	if err := runBugfix(ws, []string{
+		"F001", "Fix reset validation", "--acceptance", "Reset uses the same policy",
+	}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	features, err := ws.ListFeatures()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(features) != 2 || features[1].Type != "bugfix" || features[1].Parent != parent.ID {
+		t.Fatalf("features = %+v", features)
+	}
+	memory := featuregraph.ContextMarkdown(ws.DotDir(), features[1].ID)
+	if !strings.Contains(memory, "Minimum length is 12") {
+		t.Fatalf("memory = %s", memory)
 	}
 }
 

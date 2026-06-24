@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/tinhtran/thanos/internal/codegraph"
+	"github.com/tinhtran/thanos/internal/featuregraph"
 	"github.com/tinhtran/thanos/internal/model"
 	"github.com/tinhtran/thanos/internal/prompts"
 	"github.com/tinhtran/thanos/internal/runner"
@@ -29,6 +30,18 @@ func (o *Orchestrator) Run(ctx context.Context, featureID, runnerOverride string
 	feature, err := o.Workspace.LoadFeature(featureID)
 	if err != nil {
 		return err
+	}
+	features, err := o.Workspace.ListFeatures()
+	if err != nil {
+		return err
+	}
+	if err := featuregraph.Rebuild(o.Workspace.DotDir(), features); err != nil {
+		return fmt.Errorf("refresh feature memory: %w", err)
+	}
+	for _, known := range features {
+		if err := featuregraph.UpdateFromArtifacts(o.Workspace.DotDir(), known); err != nil {
+			return fmt.Errorf("learn feature memory for %s: %w", known.ID, err)
+		}
 	}
 	config, err := o.Workspace.ReadConfig()
 	if err != nil {
@@ -85,6 +98,9 @@ func (o *Orchestrator) Run(ctx context.Context, featureID, runnerOverride string
 				err = requireArtifacts(o.Workspace, feature.ID, report)
 			}
 			if err == nil {
+				err = featuregraph.UpdateFromArtifacts(o.Workspace.DotDir(), feature)
+			}
+			if err == nil {
 				current, err = o.transition(current, model.PhaseReview)
 			}
 		case model.PhaseReview:
@@ -120,7 +136,10 @@ func (o *Orchestrator) Run(ctx context.Context, featureID, runnerOverride string
 		case model.PhaseAccept:
 			err = o.executeRole(ctx, feature, config, current, runnerConfig)
 			if err == nil {
-				err = requireArtifacts(o.Workspace, feature.ID, "final-report.md", "retro-learnings.json")
+				err = requireArtifacts(o.Workspace, feature.ID, "final-report.md", "retro-learnings.json", "feature-memory.json")
+			}
+			if err == nil {
+				err = featuregraph.UpdateFromArtifacts(o.Workspace.DotDir(), feature)
 			}
 			if err == nil {
 				if graph, scanErr := codegraph.Build(o.Workspace.Root); scanErr != nil {
@@ -134,6 +153,9 @@ func (o *Orchestrator) Run(ctx context.Context, featureID, runnerOverride string
 				if err == nil {
 					feature.Status = "pending-review"
 					err = o.Workspace.SaveFeature(feature)
+					if err == nil {
+						err = featuregraph.Sync(o.Workspace.DotDir(), feature)
+					}
 				}
 			}
 		case model.PhasePending:

@@ -57,6 +57,24 @@ type Runner struct {
 	SkillsDir string   `json:"skills_dir,omitempty"`
 }
 
+type LSP struct {
+	Command  string            `json:"command"`
+	Args     []string          `json:"args,omitempty"`
+	Env      map[string]string `json:"env,omitempty"`
+	Disabled bool              `json:"disabled,omitempty"`
+}
+
+type MCP struct {
+	Type          string            `json:"type"`
+	Command       string            `json:"command,omitempty"`
+	Args          []string          `json:"args,omitempty"`
+	URL           string            `json:"url,omitempty"`
+	Env           map[string]string `json:"env,omitempty"`
+	Headers       map[string]string `json:"headers,omitempty"`
+	Disabled      bool              `json:"disabled,omitempty"`
+	DisabledTools []string          `json:"disabled_tools,omitempty"`
+}
+
 type Skill struct {
 	Name   string   `json:"name"`
 	Path   string   `json:"path"`
@@ -80,6 +98,8 @@ type Config struct {
 	DefaultRunner      string              `json:"default_runner"`
 	MaxRounds          int                 `json:"max_rounds"`
 	Runners            map[string]Runner   `json:"runners"`
+	LSP                map[string]LSP      `json:"lsp,omitempty"`
+	MCP                map[string]MCP      `json:"mcp,omitempty"`
 	Skills             []Skill             `json:"skills,omitempty"`
 	PluginMarketplaces []PluginMarketplace `json:"plugin_marketplaces,omitempty"`
 	Plugins            []Plugin            `json:"plugins,omitempty"`
@@ -89,9 +109,14 @@ type Config struct {
 type Feature struct {
 	ID           string   `yaml:"id" json:"id"`
 	Title        string   `yaml:"title" json:"title"`
+	Type         string   `yaml:"type,omitempty" json:"type,omitempty"`
+	Parent       string   `yaml:"parent,omitempty" json:"parent,omitempty"`
 	Description  string   `yaml:"description" json:"description"`
 	Acceptance   []string `yaml:"acceptance" json:"acceptance"`
+	Rules        []string `yaml:"rules,omitempty" json:"rules,omitempty"`
+	Decisions    []string `yaml:"decisions,omitempty" json:"decisions,omitempty"`
 	Scope        []string `yaml:"scope,omitempty" json:"scope,omitempty"`
+	Related      []string `yaml:"related,omitempty" json:"related,omitempty"`
 	Dependencies []string `yaml:"dependencies,omitempty" json:"dependencies,omitempty"`
 	Priority     string   `yaml:"priority" json:"priority"`
 	Status       string   `yaml:"status" json:"status"`

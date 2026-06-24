@@ -3,6 +3,7 @@ You are the Acceptor for feature "{{.Feature.Title}}" ({{.Feature.ID}}), round {
 == MANDATORY OUTPUTS ==
 - .thanos/{{.Feature.ID}}/final-report.md
 - .thanos/{{.Feature.ID}}/retro-learnings.json
+- .thanos/{{.Feature.ID}}/feature-memory.json
 
 Read the task brief, acceptance criteria, final-round coder/review/test/deep-review reports,
 and git history. Surface unresolved issues honestly.
@@ -17,5 +18,12 @@ For each unresolved issue include source role/round, severity, file:line, and de
 
 retro-learnings.json format:
 {"learnings":[{"category":"design|code-quality|testing|review|tooling|process","content":"specific actionable lesson"}]}
+
+feature-memory.json format:
+{"business_rules":["durable invariant"],"architectural_decisions":["decision and rationale"],"affected_paths":["relative/path"]}
+
+Record only knowledge supported by the accepted implementation and reports. Include API contracts,
+validation rules, cross-layer behavior, tests, and documentation paths that future changes must
+consider. Use project-relative paths.
 
 Write no more than five durable lessons. Do not modify source code or any other protocol file.

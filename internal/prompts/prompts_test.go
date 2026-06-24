@@ -44,6 +44,9 @@ func TestAllTemplatesRender(t *testing.T) {
 			if !strings.Contains(output, "Codebase Graph") {
 				t.Fatalf("codebase graph instructions missing: %q", output)
 			}
+			if !strings.Contains(output, "Persistent Feature Memory") {
+				t.Fatalf("feature memory instructions missing: %q", output)
+			}
 		})
 	}
 }

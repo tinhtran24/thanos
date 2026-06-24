@@ -20,6 +20,13 @@ with distinct strengths converge to conquer complexity.
 
 ## Features
 
+- Bubble Tea terminal UI with project sessions, phase progress, capability
+  status, and keyboard-driven task operations
+- Per-session runner selection with filesystem context preserved across model
+  changes
+- Persistent feature graph containing business rules, architectural decisions,
+  feature relationships, and affected paths
+- Bugfix-to-feature mapping with inherited impact context
 - Full prompt suite derived from the upstream 4x role templates
 - Designer, Design Reviewer, Coder, Reviewer, Tester, Deep Reviewer, and Acceptor pipeline
 - Mini-Coder, Re-Verifier, Synthesizer, and Gate prompts for specialized workflows
@@ -32,6 +39,56 @@ with distinct strengths converge to conquer complexity.
 - Append-only JSONL event history
 - Human `pending-review` gate before completion
 - No AI SDK dependency or vendor lock-in
+
+## Terminal UI architecture
+
+The TUI follows the transferable parts of Charm's Crush architecture without
+replacing Thanos's workflow engine:
+
+1. One top-level Bubble Tea model owns terminal size, session selection, task
+   execution, and rendering.
+2. Features are project-scoped work sessions. Their YAML specification and
+   `.thanos/<feature-id>/state.json` remain the source of truth.
+3. Long-running orchestration executes as a Bubble Tea command, so the UI keeps
+   rendering while the deterministic orchestrator runs.
+4. The center panel renders Thanos's phase graph instead of a generic chat
+   transcript.
+5. The capability panel reports the active runner, local code graph, configured
+   LSPs, MCPs, and skills.
+
+Switching runners updates the feature and runtime state only. It does not
+rewrite prompts, reports, events, or artifacts, so another LLM can continue the
+same session at its current validated phase.
+
+## Feature memory graph
+
+The symbol graph and feature graph have separate responsibilities:
+
+- `.thanos/codebase/graph.json` describes files, symbols, calls, imports, tests,
+  and repository conventions.
+- `.thanos/memory/feature-graph.json` describes product features, bugfixes,
+  business invariants, architectural decisions, dependencies, related
+  features, and known affected paths.
+
+A bugfix feature stores `type: bugfix` and a full parent feature ID. At run
+time, Thanos rebuilds feature metadata from YAML, merges learned memory from
+accepted work, resolves the connected feature context, and expands known paths
+through code-graph relationships. The resulting impact map is appended to every
+role prompt under `Persistent Feature Memory`.
+
+The Acceptor must write:
+
+```json
+{
+  "business_rules": ["durable behavior or invariant"],
+  "architectural_decisions": ["decision and rationale"],
+  "affected_paths": ["project/relative/path"]
+}
+```
+
+Coder reports also contribute paths from their `Files Changed` section. This
+means project memory improves after each completed workflow while remaining
+auditable and editable on disk.
 
 ## Install
 
@@ -163,6 +220,7 @@ configured executables exist.
     design-review-report.md
     final-report.md
     retro-learnings.json
+    feature-memory.json
     rounds/
       round-1/
         coder-report.md

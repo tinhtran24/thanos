@@ -35,6 +35,7 @@ func (fakeRunner) Run(_ context.Context, root string, _ model.Runner, prompt str
 	case contains(prompt, "You are the Acceptor"):
 		os.WriteFile(filepath.Join(base, "final-report.md"), []byte("# Final Report"), 0o644)
 		os.WriteFile(filepath.Join(base, "retro-learnings.json"), []byte(`{"learnings":[]}`), 0o644)
+		os.WriteFile(filepath.Join(base, "feature-memory.json"), []byte(`{"business_rules":[],"architectural_decisions":[],"affected_paths":[]}`), 0o644)
 	}
 	return nil
 }
