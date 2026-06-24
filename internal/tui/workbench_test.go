@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/tinhtran/thanos/internal/model"
 	"github.com/tinhtran/thanos/internal/workspace"
 )
@@ -37,7 +37,7 @@ func TestViewOmitsBriefAndAcceptance(t *testing.T) {
 		Description: "SECRET_BRIEF_TEXT", Acceptance: []string{"ACCEPT_CRITERION_ONE"},
 	}
 	ui := newTestModel(t, feature)
-	view := ui.View()
+	view := ui.View().Content
 	// The old detail view rendered the feature Description under a "BRIEF"
 	// section and the acceptance list under an "ACCEPTANCE" section; both are
 	// gone now. (Upper-cased section titles are checked so the temp-dir path in
@@ -57,46 +57,76 @@ func TestTabCyclesFocusToChatAndInput(t *testing.T) {
 	if ui.focus != focusSessions {
 		t.Fatalf("initial focus = %d, want sessions", ui.focus)
 	}
-	ui.Update(tea.KeyMsg{Type: tea.KeyTab})
+	ui.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	if ui.focus != focusChat {
 		t.Fatalf("after first tab focus = %d, want chat", ui.focus)
 	}
-	ui.Update(tea.KeyMsg{Type: tea.KeyTab})
+	ui.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	if ui.focus != focusInput {
 		t.Fatalf("after second tab focus = %d, want input", ui.focus)
 	}
-	ui.Update(tea.KeyMsg{Type: tea.KeyTab})
+	ui.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	if ui.focus != focusSessions {
 		t.Fatalf("after third tab focus = %d, want sessions", ui.focus)
 	}
 }
 
-func TestNewCommandCreatesSession(t *testing.T) {
+func TestNewSessionFlowCollectsDescriptionAndAcceptance(t *testing.T) {
 	ui := newTestModel(t, model.Feature{ID: "F001-x", Title: "X", Status: "todo"})
-	// Focus the command box and submit "/new Second feature".
-	ui.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
-	if ui.focus != focusInput {
-		t.Fatalf("pressing n should focus input, got %d", ui.focus)
-	}
-	ui.input.SetValue("/new Second feature")
-	model, _ := ui.submitCommand()
-	ui = model.(*modelUI)
-	// createFeature runs as a command; execute it and feed the result back.
-	cmd := ui.createFeature("Second feature")
-	msg := cmd()
-	ui.Update(msg)
-	// reload runs as a command too; run it synchronously.
-	reload := ui.reload()
-	ui.Update(reload())
 
-	var found bool
-	for _, f := range ui.features {
-		if f.Title == "Second feature" {
-			found = true
+	// n opens the guided flow, focused on the command box at the title step.
+	ui.Update(tea.KeyPressMsg{Code: 'n', Text: "n"})
+	if !ui.create.active || ui.focus != focusInput {
+		t.Fatalf("n should start the create flow focused on input (active=%v focus=%d)", ui.create.active, ui.focus)
+	}
+	if ui.create.step != stepTitle {
+		t.Fatalf("flow should begin at the title step, got %d", ui.create.step)
+	}
+
+	// Title → description → acceptance, each saved on enter.
+	ui.input.SetValue("Add OAuth login")
+	ui.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if ui.create.step != stepDesc {
+		t.Fatalf("after title, step = %d, want description", ui.create.step)
+	}
+	ui.input.SetValue("Support Google and GitHub OAuth")
+	ui.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if ui.create.step != stepAccept {
+		t.Fatalf("after description, step = %d, want acceptance", ui.create.step)
+	}
+	ui.input.SetValue("google works; github works")
+	_, cmd := ui.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
+	if ui.create.active {
+		t.Fatal("flow should finish after the acceptance step")
+	}
+	if cmd == nil {
+		t.Fatal("finishing the flow should create the session")
+	}
+	ui.Update(cmd()) // run the create command (writes the feature to disk)
+
+	// The created feature carries the description and acceptance from the flow.
+	feats, err := ui.ws.ListFeatures()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var id string
+	for _, f := range feats {
+		if f.Title == "Add OAuth login" {
+			id = f.ID
 		}
 	}
-	if !found {
-		t.Fatalf("expected a 'Second feature' session, got %+v", ui.features)
+	if id == "" {
+		t.Fatalf("created feature not found among %+v", feats)
+	}
+	full, err := ui.ws.LoadFeature(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if full.Description != "Support Google and GitHub OAuth" {
+		t.Fatalf("description = %q", full.Description)
+	}
+	if len(full.Acceptance) != 2 || full.Acceptance[0] != "google works" || full.Acceptance[1] != "github works" {
+		t.Fatalf("acceptance = %v", full.Acceptance)
 	}
 }
 
@@ -108,9 +138,7 @@ func TestMouseClickSelectsChatBubbleAndReleaseCopies(t *testing.T) {
 	_ = ui.View()
 
 	// Press inside the chat viewport: selects a bubble and starts a drag.
-	_, _ = ui.Update(tea.MouseMsg{
-		X: ui.chatX0, Y: ui.chatY0, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress,
-	})
+	_, _ = ui.Update(tea.MouseClickMsg{X: ui.chatX0, Y: ui.chatY0, Button: tea.MouseLeft})
 	if !ui.dragging {
 		t.Fatal("press in chat should start a drag")
 	}
@@ -119,9 +147,7 @@ func TestMouseClickSelectsChatBubbleAndReleaseCopies(t *testing.T) {
 	}
 
 	// Release: should emit a copy command and end the drag.
-	_, cmd := ui.Update(tea.MouseMsg{
-		X: ui.chatX0, Y: ui.chatY0, Button: tea.MouseButtonLeft, Action: tea.MouseActionRelease,
-	})
+	_, cmd := ui.Update(tea.MouseReleaseMsg{X: ui.chatX0, Y: ui.chatY0, Button: tea.MouseLeft})
 	if ui.dragging {
 		t.Fatal("release should end the drag")
 	}
@@ -168,21 +194,50 @@ func TestUnknownCommandErrors(t *testing.T) {
 	}
 }
 
-func TestMouseSelectModeTogglesMouse(t *testing.T) {
+func TestInputCursorSurfacedWhenFocused(t *testing.T) {
 	ui := newTestModel(t, model.Feature{ID: "F001-x", Title: "X", Status: "todo"})
-	_, cmd := ui.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
+	// With the sessions pane focused, no terminal cursor is shown.
+	if cur := ui.View().Cursor; cur != nil {
+		t.Fatalf("cursor should be hidden when sessions focused, got %+v", cur)
+	}
+	// Pressing n focuses the command box; the real cursor should appear on the
+	// input row (crush's pattern: View.Cursor positioned to the input).
+	ui.Update(tea.KeyPressMsg{Code: 'n', Text: "n"})
+	if ui.focus != focusInput {
+		t.Fatalf("n should focus the input, got focus=%d", ui.focus)
+	}
+	v := ui.View()
+	if v.Cursor == nil {
+		t.Fatal("cursor should be visible when the command box is focused")
+	}
+	if v.Cursor.Y != ui.inputY0 {
+		t.Fatalf("cursor Y = %d, want input row %d", v.Cursor.Y, ui.inputY0)
+	}
+	if v.Cursor.X < 2 {
+		t.Fatalf("cursor X = %d, want >= prompt width (2)", v.Cursor.X)
+	}
+}
+
+func TestMouseSelectModeTogglesMouseMode(t *testing.T) {
+	ui := newTestModel(t, model.Feature{ID: "F001-x", Title: "X", Status: "todo"})
+	// Default: the app captures the mouse (cell motion) to handle clicks/drags.
+	if ui.View().MouseMode != tea.MouseModeCellMotion {
+		t.Fatalf("default MouseMode = %v, want CellMotion", ui.View().MouseMode)
+	}
+	// ctrl+s releases mouse capture so the terminal does native text selection.
+	ui.Update(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
 	if !ui.selectMode {
 		t.Fatal("ctrl+s should enable select mode")
 	}
-	if cmd == nil {
-		t.Fatal("ctrl+s should emit a DisableMouse command")
+	if ui.View().MouseMode != tea.MouseModeNone {
+		t.Fatalf("select-mode MouseMode = %v, want None", ui.View().MouseMode)
 	}
-	// Esc resumes.
-	_, cmd = ui.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	// Esc resumes app mouse handling.
+	ui.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
 	if ui.selectMode {
 		t.Fatal("esc should disable select mode")
 	}
-	if cmd == nil {
-		t.Fatal("esc should emit an EnableMouse command")
+	if ui.View().MouseMode != tea.MouseModeCellMotion {
+		t.Fatalf("after esc MouseMode = %v, want CellMotion", ui.View().MouseMode)
 	}
 }

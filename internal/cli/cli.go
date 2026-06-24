@@ -88,6 +88,12 @@ func Execute(ctx context.Context, args []string, version string, stdout, stderr 
 		return runMCP(ws, args[1:], stdout)
 	case "memory":
 		return runMemory(ws, args[1:], stdout)
+	case "ask":
+		return runAsk(ctx, ws, args[1:], stdout, stderr)
+	case "plan":
+		return runPlan(ws, args[1:], stdout)
+	case "clarify":
+		return runClarify(ctx, ws, args[1:], stdout, stderr)
 	default:
 		return fmt.Errorf("unknown command %q; run 'thanos help'", args[0])
 	}
@@ -395,7 +401,7 @@ func prepareContinue(ws *workspace.Workspace, featureID string, stdout io.Writer
 	if err != nil {
 		return "", err
 	}
-	failedRound, reportPath, err := latestFailedRound(ws, feature.ID, current.Round)
+	failedRound, reportPath, err := latestFailedRound(ws, feature.ID, current)
 	if err != nil {
 		return "", err
 	}
@@ -428,11 +434,15 @@ func prepareContinue(ws *workspace.Workspace, featureID string, stdout io.Writer
 	return feature.ID, nil
 }
 
-func latestFailedRound(ws *workspace.Workspace, featureID string, currentRound int) (int, string, error) {
+func latestFailedRound(ws *workspace.Workspace, featureID string, current model.State) (int, string, error) {
+	ecDir := ""
+	if current.ECTotal > 1 && current.ECIndex >= 1 {
+		ecDir = fmt.Sprintf("ec-%d", current.ECIndex)
+	}
 	reportNames := []string{"deep-review-report.md", "test-report.md", "review-report.md"}
-	for round := currentRound; round >= 1; round-- {
+	for round := current.Round; round >= 1; round-- {
 		for _, reportName := range reportNames {
-			relative := filepath.Join("rounds", fmt.Sprintf("round-%d", round), reportName)
+			relative := filepath.Join(ecDir, "rounds", fmt.Sprintf("round-%d", round), reportName)
 			content, err := ws.ReadArtifact(featureID, relative)
 			if err != nil {
 				if errors.Is(err, os.ErrNotExist) {
@@ -551,6 +561,164 @@ func runDone(ws *workspace.Workspace, args []string, stdout io.Writer) error {
 		Status:  ui.Completed,
 	})
 	return nil
+}
+
+// runAsk sends a single ad-hoc prompt straight to the configured runner and
+// streams its output — a headless one-off, like `crush run`, with no pipeline.
+func runAsk(ctx context.Context, ws *workspace.Workspace, args []string, stdout, stderr io.Writer) error {
+	flags := flag.NewFlagSet("ask", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	runnerName := flags.String("runner", "", "runner override")
+	args, err := intersperseFlags(args, map[string]bool{"--runner": true})
+	if err != nil {
+		return err
+	}
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	prompt := strings.TrimSpace(strings.Join(flags.Args(), " "))
+	if prompt == "" {
+		return errors.New("usage: thanos ask \"<prompt>\" [--runner name]")
+	}
+	config, err := ws.ReadConfig()
+	if err != nil {
+		return err
+	}
+	name := *runnerName
+	if name == "" {
+		name = config.DefaultRunner
+	}
+	runnerConfig, ok := config.Runners[name]
+	if !ok {
+		return fmt.Errorf("runner %q is not configured", name)
+	}
+	return runner.Subprocess{}.Run(ctx, ws.Root, runnerConfig, prompt, stdout, stderr)
+}
+
+// runPlan lists, adds, or removes execution chunks (ECs) of a feature's plan.
+func runPlan(ws *workspace.Workspace, args []string, stdout io.Writer) error {
+	if len(args) < 2 {
+		return errors.New("usage: thanos plan ls|add|rm FEATURE_ID [args]")
+	}
+	sub := args[0]
+	feature, err := ws.LoadFeature(args[1])
+	if err != nil {
+		return err
+	}
+	plan, err := ws.ReadPlan(feature.ID)
+	if err != nil {
+		return err
+	}
+	switch sub {
+	case "ls":
+		active := plan.ActiveChunks()
+		if len(active) == 0 {
+			ui.Info(stdout, "No execution plan yet. Run the feature to let the planner create one.")
+			return nil
+		}
+		rows := make([][]string, 0, len(active))
+		for _, c := range active {
+			status := c.Status
+			if status == "" {
+				status = "todo"
+			}
+			rows = append(rows, []string{strconv.Itoa(c.Index), c.ID, status, c.Title})
+		}
+		ui.Block(stdout, ui.Table([]string{"#", "ID", "STATUS", "TITLE"}, rows))
+		return nil
+	case "rm":
+		if len(args) != 3 {
+			return errors.New("usage: thanos plan rm FEATURE_ID INDEX")
+		}
+		index, convErr := strconv.Atoi(args[2])
+		if convErr != nil {
+			return fmt.Errorf("invalid EC index %q", args[2])
+		}
+		found := false
+		for i := range plan.Chunks {
+			if plan.Chunks[i].Index == index {
+				plan.Chunks[i].Status = "removed"
+				found = true
+			}
+		}
+		if !found {
+			return fmt.Errorf("no EC with index %d", index)
+		}
+		if err := ws.WritePlan(feature.ID, plan); err != nil {
+			return err
+		}
+		printExecLog(stdout, ui.ExecLogEntry{
+			Type: "write", Path: ws.PlanPath(feature.ID),
+			Message: fmt.Sprintf("Removed EC-%d from %s", index, feature.ID), Status: ui.Completed,
+		})
+		return nil
+	case "add":
+		title := strings.TrimSpace(strings.Join(args[2:], " "))
+		if title == "" {
+			return errors.New("usage: thanos plan add FEATURE_ID \"<title>\"")
+		}
+		next := 0
+		for _, c := range plan.Chunks {
+			if c.Index > next {
+				next = c.Index
+			}
+		}
+		next++
+		plan.Chunks = append(plan.Chunks, model.ExecutionChunk{
+			Index: next, ID: fmt.Sprintf("%s-ec%d", feature.ID, next), Title: title, Status: "todo",
+		})
+		if err := ws.WritePlan(feature.ID, plan); err != nil {
+			return err
+		}
+		printExecLog(stdout, ui.ExecLogEntry{
+			Type: "write", Path: ws.PlanPath(feature.ID),
+			Message: fmt.Sprintf("Added EC-%d to %s", next, feature.ID), Status: ui.Completed,
+		})
+		return nil
+	default:
+		return errors.New("usage: thanos plan ls|add|rm FEATURE_ID [args]")
+	}
+}
+
+// runClarify answers a paused clarification and resumes the run. The engine
+// pauses (Active=false, Reason "needs clarification") when a role writes a
+// clarify.json; this writes the answer the role reads on resume.
+func runClarify(ctx context.Context, ws *workspace.Workspace, args []string, stdout, stderr io.Writer) error {
+	if len(args) < 2 {
+		return errors.New("usage: thanos clarify FEATURE_ID <answer>")
+	}
+	feature, err := ws.LoadFeature(args[0])
+	if err != nil {
+		return err
+	}
+	answer := strings.TrimSpace(strings.Join(args[1:], " "))
+	current, err := ws.ReadState(feature.ID)
+	if err != nil {
+		return err
+	}
+	name := clarifyAnswerName(current)
+	if err := ws.WriteArtifact(feature.ID, name, answer); err != nil {
+		return err
+	}
+	current.Active = true
+	current.Reason = ""
+	if err := ws.WriteState(current); err != nil {
+		return err
+	}
+	printExecLog(stdout, ui.ExecLogEntry{
+		Type: "write", Path: filepath.Join(ws.RuntimeDir(feature.ID), name),
+		Message: "Recorded clarification; resuming", Status: ui.Completed,
+	})
+	orch := orchestrator.Orchestrator{Workspace: ws, Runner: runner.Subprocess{}, Stdout: stdout, Stderr: stderr}
+	return orch.Run(ctx, feature.ID, "")
+}
+
+// clarifyAnswerName is the EC-scoped path of the clarification answer artifact.
+func clarifyAnswerName(s model.State) string {
+	if s.ECTotal > 1 && s.ECIndex >= 1 {
+		return fmt.Sprintf("ec-%d/clarify-answer.md", s.ECIndex)
+	}
+	return "clarify-answer.md"
 }
 
 func runMemory(ws *workspace.Workspace, args []string, stdout io.Writer) error {
@@ -1265,6 +1433,9 @@ Usage:
   thanos lsp add NAME --command CMD [--args "arg,arg"]
   thanos mcp add NAME --type stdio|http|sse [--command CMD] [--url URL]
   thanos memory [FEATURE_ID]
+  thanos ask "<prompt>" [--runner NAME]
+  thanos plan ls|add|rm FEATURE_ID [args]
+  thanos clarify FEATURE_ID "<answer>"
   thanos scan
   thanos version
 

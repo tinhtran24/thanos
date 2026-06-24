@@ -42,23 +42,74 @@ with distinct strengths converge to conquer complexity.
 
 ## Terminal UI architecture
 
-The TUI follows the transferable parts of Charm's Crush architecture without
-replacing Thanos's workflow engine:
+The TUI ports the transferable parts of Charm's Crush architecture (now on
+**Bubble Tea v2** / Lip Gloss v2, `charm.land/...`) without replacing Thanos's
+workflow engine. It lives in `internal/tui/` as component packages:
 
-1. One top-level Bubble Tea model owns terminal size, session selection, task
-   execution, and rendering.
-2. Features are project-scoped work sessions. Their YAML specification and
-   `.thanos/<feature-id>/state.json` remain the source of truth.
-3. Long-running orchestration executes as a Bubble Tea command, so the UI keeps
-   rendering while the deterministic orchestrator runs.
-4. The center panel renders Thanos's phase graph instead of a generic chat
-   transcript.
-5. The capability panel reports the active runner, local code graph, configured
-   LSPs, MCPs, and skills.
+| Package | Responsibility |
+|---|---|
+| `tui` | Root `tea.Model`: state, message routing, focus, mouse, layout (`view.go`) |
+| `chat` | Role-attributed agent log (viewport), bubble selection/copy, phase-flow strip |
+| `sidebar` | Logo + clickable Feature→EC tree + model/MCP info (right column) |
+| `dialog` | Feature picker, help, and the clarification popup |
+| `input` | Command box (slash-commands, completions, real terminal cursor) |
+| `attachments` | Staged files/`@`-refs and the context-manifest writer |
+| `styles` / `util` | Palette + role/phase styling; text, clipboard (OSC52), overlay |
 
-Switching runners updates the feature and runtime state only. It does not
+Key points:
+
+1. One top-level model owns terminal size, tree selection (feature + EC cursor),
+   task execution, and rendering. `View()` returns a `tea.View` whose `AltScreen`
+   and `MouseMode` fields are declarative (v2 dropped the program-option form).
+2. Features are project-scoped sessions; their YAML and
+   `.thanos/<feature-id>/state.json` (now including `ec_index`/`ec_total`) remain
+   the source of truth. Each feature's `execution-plan.yaml` drives the tree.
+3. Agent runs execute as a subprocess of the `thanos` binary itself
+   (`os.Executable()`), streamed into the chat; the engine writes role events to
+   `events.jsonl`, which the TUI tails to render each role as a chat bubble.
+4. The right sidebar reports the active runner, code graph, LSPs, MCPs, and the
+   per-EC status tree; clicking a feature/EC row selects it.
+5. The command box exposes the full CLI surface as slash-commands and stages
+   `@path`/pasted files into the run context manifest.
+
+Switching runners updates the feature and runtime state only — it does not
 rewrite prompts, reports, events, or artifacts, so another LLM can continue the
 same session at its current validated phase.
+
+## Execution chunks (ECs) & the per-EC engine
+
+`internal/orchestrator/orchestrator.go` first runs the **planner** role, which
+writes `execution-plan.yaml` (`model.ExecutionPlan` → `[]model.ExecutionChunk`).
+The orchestrator then iterates the chunks: each EC runs the full
+`design → design-review → code ↔ amend → review → test → deep-review` cycle to a
+passing deep review before the next EC starts; after the last EC the feature-level
+`accept` synthesizes results and moves to `pending-review`.
+
+- `model.State` gains `ECIndex` (1-based; 0 during planning), `ECTotal`, `ECID`;
+  `Round` is the **per-EC** amend counter, reset when a chunk's design begins.
+- Artifacts are EC-scoped via `ec-<i>/…` when `ECTotal > 1`; a single implicit
+  chunk keeps the flat feature-root layout (backward compatible). Helpers
+  `ecDir`/`ecPrefix`/`ecJoin` build the paths; prompts receive the prefix as
+  `Data.ECPrefix` and the chunk as `Data.ExecutionChunk`.
+- State-machine additions (`internal/state/machine.go`): `Init → Plan`,
+  `Plan → Design`, and `DeepReview → {Accept, Design (next EC), Amend}`.
+
+### Clarification protocol
+
+Any role may write `clarify.json` (`{"question": "...", "options": [...]}`) instead
+of finishing. After the role runs, `Orchestrator.clarifyPending` detects an
+unanswered/newer `clarify.json` and the run pauses cleanly (`Active=false`,
+`Reason="needs clarification"`, phase preserved). `thanos clarify` (or the TUI
+popup) writes `clarify-answer.md` and re-runs; the role reads the answer and
+proceeds. Paths are EC-scoped like other chunk artifacts.
+
+### Coding style & attachments
+
+If `.thanos/coding-style.md` exists it is loaded into `prompts.Data.CodingStyle`
+and injected into the designer/coder/reviewer templates. Before a run the TUI
+writes staged attachments and `@`-file references to
+`.thanos/<id>/context/attachments.md`; `prompts.Render` references it (EC-level
+overrides feature-level) so the agent reads it as primary context.
 
 ## Feature memory graph
 
@@ -209,26 +260,36 @@ configured executables exist.
 ```text
 .thanos/
   settings.json
+  coding-style.md            # optional; injected into design/code/review prompts
   features/
     F001-oauth2-authentication.yaml
   F001-oauth2-authentication/
-    state.json
-    events.jsonl
-    task-brief.md
-    acceptance-criteria.md
-    test-strategy.yaml
-    design-review-report.md
-    final-report.md
+    state.json               # includes ec_index / ec_total / ec_id
+    events.jsonl             # role-start/end, transition, ec-start/end, clarify
+    execution-plan.yaml      # the planner's ordered execution chunks (ECs)
+    final-report.md          # feature-level accept artifacts (after the last EC)
     retro-learnings.json
     feature-memory.json
-    rounds/
-      round-1/
-        coder-report.md
-        review-report.md
-        test-report.md
-        deep-review-report.md
+    ec-1/                    # per-chunk artifacts (only when >1 chunk)
+      task-brief.md
+      acceptance-criteria.md
+      test-strategy.yaml
+      design-review-report.md
+      clarify.json           # written by a role when blocked; pauses the run
+      clarify-answer.md      # written by `thanos clarify`; consumed on resume
+      context/attachments.md # staged files / @-refs passed to the agent
+      rounds/
+        round-1/
+          coder-report.md
+          review-report.md
+          test-report.md
+          deep-review-report.md
+    ec-2/
+      ...
 ```
 
+A single-chunk feature keeps the flat layout (artifacts directly under the
+feature directory, no `ec-<n>/`), so existing features and runs are unaffected.
 Feature YAML files are the human-editable backlog. Runtime state and reports are
 kept separately so interrupted runs can resume without shared model context.
 
@@ -239,7 +300,11 @@ kept separately so interrupted runs can resume without shared model context.
 | `thanos init` | Initialize `.thanos/` without network access |
 | `thanos new` | Create a feature |
 | `thanos run` | Run or resume the agent loop |
+| `thanos continue` | Resume a stalled feature from its last failed round |
 | `thanos status` | List feature and phase status |
+| `thanos plan ls\|add\|rm FEATURE_ID` | List/add/remove a feature's execution chunks |
+| `thanos clarify FEATURE_ID "<answer>"` | Answer a paused clarification and resume |
+| `thanos ask "<prompt>" [--runner NAME]` | One-off headless prompt to the runner |
 | `thanos prompt` | Render one role prompt without running it |
 | `thanos transition` | Perform a validated manual transition |
 | `thanos done` | Apply human approval |

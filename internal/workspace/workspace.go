@@ -162,7 +162,51 @@ func (w *Workspace) AppendEvent(event model.Event) error {
 }
 
 func (w *Workspace) WriteArtifact(id, name, content string) error {
-	return os.WriteFile(filepath.Join(w.RuntimeDir(id), name), []byte(content), 0o644)
+	path := filepath.Join(w.RuntimeDir(id), name)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte(content), 0o644)
+}
+
+// EnsureArtifactDir creates the directory that would hold the named (possibly
+// nested, e.g. "ec-1/rounds/round-2") artifact, so an agent subprocess can write
+// into it.
+func (w *Workspace) EnsureArtifactDir(id, name string) error {
+	return os.MkdirAll(filepath.Join(w.RuntimeDir(id), name), 0o755)
+}
+
+// PlanPath returns the path to a feature's execution plan.
+func (w *Workspace) PlanPath(id string) string {
+	return filepath.Join(w.RuntimeDir(id), "execution-plan.yaml")
+}
+
+// ReadPlan loads the execution plan; a missing file yields an empty plan.
+func (w *Workspace) ReadPlan(id string) (model.ExecutionPlan, error) {
+	var plan model.ExecutionPlan
+	data, err := os.ReadFile(w.PlanPath(id))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return plan, nil
+		}
+		return plan, err
+	}
+	if err := yaml.Unmarshal(data, &plan); err != nil {
+		return plan, fmt.Errorf("%s: %w", w.PlanPath(id), err)
+	}
+	return plan, nil
+}
+
+// WritePlan persists the execution plan.
+func (w *Workspace) WritePlan(id string, plan model.ExecutionPlan) error {
+	data, err := yaml.Marshal(plan)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(w.RuntimeDir(id), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(w.PlanPath(id), data, 0o644)
 }
 
 func (w *Workspace) ReadArtifact(id, name string) (string, error) {

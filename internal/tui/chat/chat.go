@@ -6,8 +6,8 @@ package chat
 import (
 	"strings"
 
-	"github.com/charmbracelet/bubbles/viewport"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/viewport"
+	"charm.land/lipgloss/v2"
 	"github.com/tinhtran/thanos/internal/model"
 	"github.com/tinhtran/thanos/internal/tui/styles"
 )
@@ -31,15 +31,15 @@ type Model struct {
 
 // New returns an empty chat model.
 func New() Model {
-	return Model{vp: viewport.New(0, 0), selIdx: -1, anchor: -1}
+	return Model{vp: viewport.New(), selIdx: -1, anchor: -1}
 }
 
 // SetSize sizes the underlying viewport.
 func (m *Model) SetSize(width, height int) {
 	m.width = width
 	m.height = height
-	m.vp.Width = width
-	m.vp.Height = height
+	m.vp.SetWidth(width)
+	m.vp.SetHeight(height)
 	m.rerender()
 }
 
@@ -211,7 +211,7 @@ func (m *Model) messageAtRow(row int) int {
 	if row < 0 {
 		row = 0
 	}
-	line := m.vp.YOffset + row
+	line := m.vp.YOffset() + row
 	if line < 0 {
 		line = 0
 	}
@@ -257,8 +257,8 @@ func (m *Model) selRange() (int, int) {
 // --- scrolling ---------------------------------------------------------------
 
 // ScrollUp/ScrollDown move the viewport and mark a manual scroll.
-func (m *Model) ScrollUp(n int)   { m.vp.LineUp(n); m.userScroll = !m.vp.AtBottom() }
-func (m *Model) ScrollDown(n int) { m.vp.LineDown(n); m.userScroll = !m.vp.AtBottom() }
+func (m *Model) ScrollUp(n int)   { m.vp.ScrollUp(n); m.userScroll = !m.vp.AtBottom() }
+func (m *Model) ScrollDown(n int) { m.vp.ScrollDown(n); m.userScroll = !m.vp.AtBottom() }
 
 func (m *Model) ensureSelectedVisible() {
 	// Simplest reliable behavior: keep the bottom in view as new content streams,

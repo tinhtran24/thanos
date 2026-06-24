@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"embed"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"text/template"
@@ -29,6 +30,16 @@ type Data struct {
 	LocaleName    string
 	CodebaseGraph string
 	FeatureMemory string
+
+	// Execution-chunk context. ExecutionChunk is the chunk the current role works
+	// on (nil during feature-level planning/accept). Plan is the full chunk list.
+	// ECPrefix is the artifact path prefix for the current chunk ("" for a single
+	// implicit chunk, "ec-<i>/" for a multi-chunk plan). CodingStyle is the
+	// optional project coding-style doc.
+	ExecutionChunk *model.ExecutionChunk
+	Plan           []model.ExecutionChunk
+	ECPrefix       string
+	CodingStyle    string
 }
 
 type Profile struct {
@@ -104,6 +115,17 @@ func Render(role model.Role, data Data) (string, error) {
 	output.WriteString("\n")
 	output.WriteString("\n== Codebase Graph ==\n")
 	fmt.Fprintf(&output, "Read `%s` before exploring source files. It contains the local codebase map, hub symbols, relationships, and detected conventions. Use `.thanos/codebase/graph.json` for machine-readable edges.\n", data.CodebaseGraph)
+
+	// User-attached context (files/@-refs). The TUI writes the manifest before a
+	// run; reference it (EC-level overrides feature-level) when present.
+	for _, rel := range []string{filepath.Join(data.ECPrefix, "context", "attachments.md"), filepath.Join("context", "attachments.md")} {
+		abs := filepath.Join(data.Root, ".thanos", data.Feature.ID, rel)
+		if _, err := os.Stat(abs); err == nil {
+			output.WriteString("\n== Attached context ==\n")
+			fmt.Fprintf(&output, "The user attached files and notes for this task. Read `.thanos/%s` and use them as primary context.\n", filepath.ToSlash(filepath.Join(data.Feature.ID, rel)))
+			break
+		}
+	}
 	return output.String(), nil
 }
 

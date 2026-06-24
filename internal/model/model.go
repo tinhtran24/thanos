@@ -6,6 +6,7 @@ type Phase string
 
 const (
 	PhaseInit         Phase = "init"
+	PhasePlan         Phase = "planning"
 	PhaseDesign       Phase = "designing"
 	PhaseDesignReview Phase = "design-reviewing"
 	PhaseCode         Phase = "coding"
@@ -23,6 +24,7 @@ const (
 type Role string
 
 const (
+	RolePlanner        Role = "planner"
 	RoleDesigner       Role = "designer"
 	RoleDesignReviewer Role = "design-reviewer"
 	RoleCoder          Role = "coder"
@@ -135,6 +137,42 @@ type State struct {
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 	Reason    string    `json:"reason,omitempty"`
+
+	// Execution-chunk tracking. ECIndex is the 1-based current chunk (0 while the
+	// feature is being planned); ECTotal is the number of active chunks. Round is
+	// the per-chunk amend counter, reset when a chunk starts.
+	ECIndex int    `json:"ec_index,omitempty"`
+	ECTotal int    `json:"ec_total,omitempty"`
+	ECID    string `json:"ec_id,omitempty"`
+}
+
+// ExecutionChunk is one ordered slice of a feature ("EC"). The planner role
+// splits a feature into chunks; each chunk runs the full design→…→deep-review
+// cycle to completion before the next chunk starts.
+type ExecutionChunk struct {
+	Index       int      `yaml:"index" json:"index"`
+	ID          string   `yaml:"id" json:"id"`
+	Title       string   `yaml:"title" json:"title"`
+	Description string   `yaml:"description,omitempty" json:"description,omitempty"`
+	Scope       []string `yaml:"scope,omitempty" json:"scope,omitempty"`
+	Acceptance  []string `yaml:"acceptance,omitempty" json:"acceptance,omitempty"`
+	Status      string   `yaml:"status,omitempty" json:"status,omitempty"` // todo|active|done|removed
+}
+
+// ExecutionPlan is the on-disk shape of execution-plan.yaml.
+type ExecutionPlan struct {
+	Chunks []ExecutionChunk `yaml:"chunks" json:"chunks"`
+}
+
+// ActiveChunks returns the chunks that are not removed, in order.
+func (p ExecutionPlan) ActiveChunks() []ExecutionChunk {
+	var out []ExecutionChunk
+	for _, c := range p.Chunks {
+		if c.Status != "removed" {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 type Event struct {

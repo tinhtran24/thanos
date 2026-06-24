@@ -3,9 +3,9 @@
 package dialog
 
 import (
-	"github.com/charmbracelet/bubbles/list"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/list"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/tinhtran/thanos/internal/tui/styles"
 )
 
@@ -63,7 +63,7 @@ func (p *FeaturePicker) SetSize(width, height int) {
 
 // Update handles keys. It reports completion via Done/Chosen/Cancelled.
 func (p *FeaturePicker) Update(msg tea.Msg) tea.Cmd {
-	if key, ok := msg.(tea.KeyMsg); ok {
+	if key, ok := msg.(tea.KeyPressMsg); ok {
 		// Only intercept enter/esc when not actively typing a filter.
 		filtering := p.list.FilterState() == list.Filtering
 		switch key.String() {

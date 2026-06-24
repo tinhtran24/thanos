@@ -5,23 +5,25 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/tinhtran/thanos/internal/model"
 	"github.com/tinhtran/thanos/internal/tui/chat"
 	"github.com/tinhtran/thanos/internal/tui/dialog"
-	"github.com/tinhtran/thanos/internal/tui/list"
+	"github.com/tinhtran/thanos/internal/tui/sidebar"
 	"github.com/tinhtran/thanos/internal/tui/styles"
 	"github.com/tinhtran/thanos/internal/tui/util"
 )
 
-const (
-	rightPaneWidth = 30
-	paneGap        = 2
-	rightThreshold = 112
-)
+const paneGap = 2
 
-func (m *modelUI) leftWidth() int {
-	return util.Min(32, util.Max(24, m.width/4))
+// sidebarWidth is the width of the right column (logo + feature/EC tree + model).
+func (m *modelUI) sidebarWidth() int {
+	sw := util.Min(44, util.Max(32, m.width*2/5))
+	if m.width-sw-paneGap < 36 {
+		sw = util.Max(24, m.width-36-paneGap)
+	}
+	return sw
 }
 
 // relayout resizes layout-dependent components when the window changes.
@@ -35,7 +37,30 @@ func (m *modelUI) relayout() {
 	}
 }
 
-func (m *modelUI) View() string {
+// View returns the rendered frame plus the declarative terminal modes. In
+// Bubble Tea v2, AltScreen and MouseMode are fields on the View: when the user
+// enters mouse-select mode we set MouseMode=None so the terminal performs its
+// own text selection; otherwise CellMotion lets the app handle clicks/drags.
+func (m *modelUI) View() tea.View {
+	view := tea.NewView(m.render())
+	view.AltScreen = true
+	view.MouseMode = tea.MouseModeCellMotion
+	if m.selectMode {
+		view.MouseMode = tea.MouseModeNone
+	}
+	// Place the real terminal cursor at the command box when it has focus
+	// (crush's pattern). The input's cursor X already includes the prompt width;
+	// the bottom bar is rendered at column 0, so only the row needs offsetting.
+	if m.focus == focusInput && m.picker == nil && !m.showHelp {
+		if cur := m.input.Cursor(); cur != nil {
+			cur.Y += m.inputY0
+			view.Cursor = cur
+		}
+	}
+	return view
+}
+
+func (m *modelUI) render() string {
 	if m.width == 0 || m.height == 0 {
 		return "Starting Thanos…"
 	}
@@ -47,34 +72,35 @@ func (m *modelUI) View() string {
 	bodyTop := lipgloss.Height(header)
 	bodyHeight := util.Max(4, m.height-lipgloss.Height(header)-lipgloss.Height(footer)-lipgloss.Height(bottom)-3)
 
-	leftWidth := m.leftWidth()
-	showRight := m.width >= rightThreshold
-	centerWidth := m.width - leftWidth - paneGap
-	if showRight {
-		centerWidth -= rightPaneWidth + paneGap
-	}
-	centerWidth = util.Max(32, centerWidth)
+	sidebarW := m.sidebarWidth()
+	chatWidth := util.Max(30, m.width-sidebarW-paneGap)
 
-	// renderCenter sizes the chat viewport and records centerHeaderLines/chatH.
+	// Chat is the main pane on the LEFT; the feature/EC tree sidebar is on the RIGHT.
 	m.chatH = 0
-	left := m.renderPanel(m.renderSessions(leftWidth-4), leftWidth, bodyHeight, m.focus == focusSessions)
-	center := m.renderPanel(m.renderCenter(centerWidth-4, bodyHeight), centerWidth, bodyHeight, m.focus == focusChat)
-	// Screen rectangle of the chat viewport (border + padding + header offsets).
-	m.chatX0 = leftWidth + paneGap + 2
+	chatPanel := m.renderPanel(m.renderCenter(chatWidth-4, bodyHeight), chatWidth, bodyHeight, m.focus == focusChat)
+	m.chatX0 = 2 // left panel border + padding
 	m.chatY0 = bodyTop + 1 + m.centerHeaderLines
-	m.chatW = centerWidth - 4
+	m.chatW = chatWidth - 4
 
-	columns := []string{left, center}
-	if showRight {
-		right := m.renderPanel(m.renderSidebar(rightPaneWidth-4), rightPaneWidth, bodyHeight, false)
-		columns = append(columns, right)
-	}
-	body := lipgloss.JoinHorizontal(lipgloss.Top, util.JoinWithGap(columns, paneGap)...)
+	sidePanel := m.renderPanel(m.renderRightSidebar(sidebarW-4, bodyHeight), sidebarW, bodyHeight, m.focus == focusSessions)
+	// Tree row geometry (border + logo(2) + blank(1) inside the right panel).
+	m.sidebarX0 = chatWidth + paneGap + 2
+	m.sidebarW = sidebarW - 4
+	m.treeY0 = bodyTop + 1 + 3
+
+	body := lipgloss.JoinHorizontal(lipgloss.Top, chatPanel, strings.Repeat(" ", paneGap), sidePanel)
+
+	// The command box is the last line of the bottom bar; record its screen row
+	// so View can position the real terminal cursor there.
+	m.inputY0 = lipgloss.Height(header) + lipgloss.Height(body) + lipgloss.Height(bottom) - 1
 
 	screen := header + "\n" + body + "\n" + bottom + "\n" + footer
 
 	if m.showHelp {
 		screen = util.Overlay(screen, dialog.RenderHelp(helpEntries()), m.width, m.height)
+	}
+	if m.clarify != nil {
+		screen = util.Overlay(screen, m.clarify.View(), m.width, m.height)
 	}
 	if m.picker != nil {
 		screen = util.Overlay(screen, m.picker.View(), m.width, m.height)
@@ -110,16 +136,37 @@ func (m *modelUI) renderHeader() string {
 	return lipgloss.NewStyle().Width(m.width).Render(brand + meta + strings.Repeat(" ", space) + status)
 }
 
-func (m *modelUI) renderSessions(width int) string {
-	sessions := make([]list.Session, 0, len(m.features))
+// renderRightSidebar draws the logo, the Feature→EC tree, and the model/MCP
+// info, and records the tree's row geometry for mouse hit-testing.
+func (m *modelUI) renderRightSidebar(width, bodyHeight int) string {
+	phase := make(map[string]model.Phase, len(m.features))
+	started := make(map[string]bool, len(m.features))
 	for _, f := range m.features {
 		snap := m.states[f.ID]
-		sessions = append(sessions, list.Session{Feature: f, Phase: snap.state.Phase, Started: snap.ok})
+		phase[f.ID] = snap.state.Phase
+		started[f.ID] = snap.ok
 	}
-	return list.Render(sessions, m.cursor, m.runningID, width)
+	tree, rows := sidebar.RenderTree(sidebar.TreeData{
+		Features: m.features, Phase: phase, Started: started, Plans: m.plans,
+		Cursor: m.cursor, ECCursor: m.ecCursor, RunningID: m.runningID,
+	}, width)
+	m.treeRows = rows
+
+	feature, _ := m.selected()
+	runnerName := feature.Runner
+	if runnerName == "" {
+		runnerName = m.config.DefaultRunner
+	}
+	caps := chat.RenderSidebar(chat.SidebarData{
+		Config: m.config, Runner: runnerName, Feature: feature, DotDir: m.ws.DotDir(),
+	}, width)
+	return sidebar.Logo(m.version) + "\n\n" + tree + "\n" + caps
 }
 
 func (m *modelUI) renderCenter(width, bodyHeight int) string {
+	if m.create.active {
+		return m.renderCreateForm(width)
+	}
 	feature, ok := m.selected()
 	if !ok {
 		return styles.SectionTitle("Conversation") + "\n\n" +
@@ -150,6 +197,63 @@ func (m *modelUI) renderCenter(width, bodyHeight int) string {
 	m.chatH = chatHeight
 
 	return title + "\n" + meta + "\n" + flow + "\n\n" + m.chat.View()
+}
+
+// renderCreateForm shows the guided new-session / bugfix form: each field with
+// its collected value, the active field mirroring what is typed in the box below.
+func (m *modelUI) renderCreateForm(width int) string {
+	m.chatH = 0 // no chat rectangle while the form is open
+
+	heading := "New session"
+	if m.create.bugfix {
+		heading = "New bugfix"
+	}
+	var b strings.Builder
+	b.WriteString(styles.SectionTitle(heading))
+	b.WriteString("\n")
+	if m.create.bugfix && m.create.parentID != "" {
+		b.WriteString(styles.WarningS.Render("bugfix of " + m.create.parentID))
+		b.WriteString("\n")
+	}
+	b.WriteString(styles.MutedS.Render("Type below; enter saves the field and moves on. esc cancels."))
+	b.WriteString("\n\n")
+
+	fields := []struct {
+		label string
+		step  int
+		value string
+	}{
+		{"Title", stepTitle, m.create.title},
+		{"Task description", stepDesc, m.create.desc},
+		{"Acceptance criteria", stepAccept, m.create.accept},
+	}
+	for _, f := range fields {
+		value := f.value
+		var marker string
+		switch {
+		case f.step == m.create.step:
+			marker = styles.AccentS.Bold(true).Render("▌ ")
+			value = m.input.Value() // live mirror of the box
+		case f.step < m.create.step:
+			marker = styles.SuccessS.Render("✓ ")
+		default:
+			marker = styles.MutedS.Render("○ ")
+		}
+		b.WriteString(marker + styles.Title.Render(f.label) + "\n")
+		shown := strings.TrimSpace(value)
+		if shown == "" {
+			if f.step == m.create.step {
+				shown = styles.MutedS.Render("(typing in the box below…)")
+			} else {
+				shown = styles.MutedS.Render("—")
+			}
+		} else {
+			shown = lipgloss.NewStyle().Foreground(styles.Text).Render(util.Wrap(shown, util.Max(8, width-2)))
+		}
+		b.WriteString("  " + strings.ReplaceAll(shown, "\n", "\n  ") + "\n\n")
+	}
+	b.WriteString(styles.MutedS.Render(fmt.Sprintf("step %d of 3", m.create.step+1)))
+	return b.String()
 }
 
 func (m *modelUI) renderSidebar(width int) string {
@@ -188,13 +292,15 @@ func (m *modelUI) renderFooter() string {
 		return lipgloss.NewStyle().Width(m.width).Render(styles.SuccessS.Render(util.Truncate(m.notice, m.width)))
 	}
 	var hint string
-	switch m.focus {
-	case focusChat:
+	switch {
+	case m.create.active:
+		hint = fmt.Sprintf("new session — step %d/3 · enter: save & next · esc: cancel", m.create.step+1)
+	case m.focus == focusChat:
 		hint = "↑↓ pick · K/J range · y copy · click/drag mouse-copy · esc back · tab input"
-	case focusInput:
+	case m.focus == focusInput:
 		hint = "enter submit · esc cancel · type / for all commands · tab cycle"
 	default:
-		hint = "↑↓ select · enter run · n new · m runner · / commands · ctrl+p find · ? help · q quit"
+		hint = "↑↓ nav · →← EC · enter run · n new · x rm-EC · c clarify · m runner · / cmd · tab chat · ? help"
 	}
 	return lipgloss.NewStyle().Width(m.width).Render(styles.MutedS.Render(hint))
 }
@@ -202,11 +308,14 @@ func (m *modelUI) renderFooter() string {
 func helpEntries() []dialog.HelpEntry {
 	he := func(keys, desc string) dialog.HelpEntry { return dialog.HelpEntry{Keys: keys, Desc: desc} }
 	return []dialog.HelpEntry{
-		he("↑ / ↓ / j / k", "move selection (sessions or chat)"),
-		he("1-9", "jump to session"),
-		he("enter / space", "run or resume the selected session"),
-		he("tab", "cycle focus: sessions → chat → input"),
-		he("n", "new session (prefilled /new)"),
+		he("↑ / ↓ / j / k", "move in the feature/EC tree"),
+		he("→ / ←", "descend into / back out of a feature's ECs"),
+		he("1-9", "jump to feature"),
+		he("enter / space", "run or resume the selected feature"),
+		he("x", "remove the selected execution chunk (EC)"),
+		he("c", "answer a pending clarification (popup)"),
+		he("tab", "cycle focus: tree → chat → input"),
+		he("n", "new session (guided form)"),
 		he("m", "switch model runner"),
 		he("d", "approve a pending session"),
 		he("r", "reload workspace"),

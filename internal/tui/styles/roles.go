@@ -1,19 +1,21 @@
 package styles
 
 import (
-	"github.com/charmbracelet/lipgloss"
+	"image/color"
+
 	"github.com/tinhtran/thanos/internal/model"
 )
 
 // RoleStyle pairs a color and a short avatar/badge glyph for a phase role, so the
 // chat log can render each agent role as a distinct "speaker".
 type RoleStyle struct {
-	Color  lipgloss.Color
+	Color  color.Color
 	Avatar string
 	Label  string
 }
 
 var roleStyles = map[model.Role]RoleStyle{
+	model.RolePlanner:        {Warning, "✦", "planner"},
 	model.RoleDesigner:       {Accent, "◆", "designer"},
 	model.RoleDesignReviewer: {Info, "◇", "design-reviewer"},
 	model.RoleCoder:          {Success, "▸", "coder"},
@@ -42,6 +44,8 @@ func Role(role model.Role) RoleStyle {
 // PhaseLabel returns a short human label for a workflow phase.
 func PhaseLabel(phase model.Phase) string {
 	switch phase {
+	case model.PhasePlan:
+		return "planning"
 	case model.PhaseDesign:
 		return "design"
 	case model.PhaseDesignReview:

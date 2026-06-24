@@ -4,7 +4,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 	"github.com/tinhtran/thanos/internal/model"
 	"github.com/tinhtran/thanos/internal/tui/styles"
 	"github.com/tinhtran/thanos/internal/tui/util"

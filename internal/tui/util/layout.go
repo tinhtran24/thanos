@@ -3,7 +3,7 @@ package util
 import (
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 )
 
 // JoinWithGap interleaves columns with gap spaces of horizontal padding.

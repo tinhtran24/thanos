@@ -8,18 +8,21 @@ import (
 )
 
 var transitions = map[model.Phase][]model.Phase{
-	model.PhaseInit:         {model.PhaseDesign},
+	model.PhaseInit:         {model.PhasePlan, model.PhaseDesign},
+	model.PhasePlan:         {model.PhaseDesign},
 	model.PhaseDesign:       {model.PhaseDesignReview},
 	model.PhaseDesignReview: {model.PhaseCode, model.PhaseDesign},
 	model.PhaseCode:         {model.PhaseReview},
 	model.PhaseReview:       {model.PhaseTest, model.PhaseAmend},
 	model.PhaseAmend:        {model.PhaseReview},
 	model.PhaseTest:         {model.PhaseDeepReview, model.PhaseAmend},
-	model.PhaseDeepReview:   {model.PhaseAccept, model.PhaseAmend},
-	model.PhaseAccept:       {model.PhasePending},
-	model.PhasePending:      {model.PhaseDone},
-	model.PhaseBlocked:      {model.PhaseDesign, model.PhaseDesignReview, model.PhaseCode, model.PhaseReview, model.PhaseTest, model.PhaseDeepReview, model.PhaseAccept},
-	model.PhaseAttention:    {model.PhaseDesign, model.PhaseCode},
+	// DeepReview pass either advances to the next chunk (Design) or, for the last
+	// chunk, finishes the feature (Accept). Amend loops back on failure.
+	model.PhaseDeepReview: {model.PhaseAccept, model.PhaseDesign, model.PhaseAmend},
+	model.PhaseAccept:     {model.PhasePending},
+	model.PhasePending:    {model.PhaseDone},
+	model.PhaseBlocked:    {model.PhasePlan, model.PhaseDesign, model.PhaseDesignReview, model.PhaseCode, model.PhaseReview, model.PhaseTest, model.PhaseDeepReview, model.PhaseAccept},
+	model.PhaseAttention:  {model.PhasePlan, model.PhaseDesign, model.PhaseCode},
 }
 
 func CanTransition(from, to model.Phase) bool {
@@ -47,6 +50,10 @@ func Transition(current model.State, to model.Phase) (model.State, error) {
 			to = model.PhaseAttention
 			current.Reason = "maximum amendment rounds reached"
 		}
+	}
+	// Entering Design begins a (new) execution chunk: reset the per-chunk round.
+	if to == model.PhaseDesign {
+		current.Round = 0
 	}
 	if to == model.PhaseCode && current.Round == 0 {
 		current.Round = 1
@@ -76,6 +83,8 @@ func ResumeFailedRound(current model.State, round int) (model.State, error) {
 
 func RoleForPhase(phase model.Phase) model.Role {
 	switch phase {
+	case model.PhasePlan:
+		return model.RolePlanner
 	case model.PhaseDesign:
 		return model.RoleDesigner
 	case model.PhaseDesignReview:

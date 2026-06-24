@@ -3,13 +3,13 @@ package chat
 import (
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 	"github.com/tinhtran/thanos/internal/model"
 	"github.com/tinhtran/thanos/internal/tui/styles"
 )
 
 var flowPhases = []model.Phase{
-	model.PhaseDesign, model.PhaseDesignReview, model.PhaseCode, model.PhaseReview,
+	model.PhasePlan, model.PhaseDesign, model.PhaseDesignReview, model.PhaseCode, model.PhaseReview,
 	model.PhaseTest, model.PhaseDeepReview, model.PhaseAccept, model.PhasePending, model.PhaseDone,
 }
 
@@ -58,7 +58,7 @@ func phaseIndex(current model.Phase) int {
 		return 0
 	}
 	if current == model.PhaseAmend {
-		return 2
+		current = model.PhaseCode // amend re-enters the coding step
 	}
 	for index, phase := range flowPhases {
 		if phase == current {

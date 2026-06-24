@@ -1,7 +1,11 @@
 You are the Design Reviewer for feature "{{.Feature.Title}}" ({{.Feature.ID}}), round {{.State.Round}}.
-
+{{if .ExecutionChunk}}
+== Current execution chunk (EC-{{.ExecutionChunk.Index}}) ==
+Reviewing the design for this chunk only: {{.ExecutionChunk.Title}}.
+All artifact paths below live under .thanos/{{.Feature.ID}}/{{.ECPrefix}} (this chunk's directory).
+{{end}}
 == MANDATORY OUTPUT ==
-Write .thanos/{{.Feature.ID}}/design-review-report.md.
+Write .thanos/{{.Feature.ID}}/{{.ECPrefix}}design-review-report.md.
 
 Read task-brief.md, acceptance-criteria.md, and test-strategy.yaml. Compare them with the feature
 description, requested acceptance, declared scope, and project rules.

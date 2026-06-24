@@ -7,11 +7,22 @@ It orchestrates specialized AI coding agents across a deterministic software
 engineering workflow:
 
 ```text
-Design → Design Review → Code → Review → Test → Deep Review → Accept
-                            ↑        │       │          │
-                            └────────┴───────┴──────────┘
-                                      Amend
+Plan ─▶ split the feature into ordered execution chunks (EC-1, EC-2, …)
+
+then run EACH chunk to completion before the next one starts:
+
+  EC-n: Design → Design Review → Code → Review → Test → Deep Review
+                                   ↑        │       │          │
+                                   └────────┴───────┴──────────┘
+                                             Amend
+
+after the last chunk: Accept → Human Review → Done
 ```
+
+A planning step first breaks a feature into ordered **execution chunks (ECs)**.
+Thanos drives EC-1 through the full cycle, then EC-2, and so on — so a large
+feature ships as a sequence of small, independently reviewed slices instead of
+one cycle that thrashes in the amend loop.
 
 Use Thanos when one AI agent is not enough. Instead of asking the same model to
 design, implement, review, and approve its own work, Thanos assigns each phase
@@ -262,7 +273,8 @@ Everything remains local; no SaaS account, API key, or source upload is needed.
 
 | Role | Responsibility | Main output |
 |---|---|---|
-| Designer | Convert requirements into implementation-ready scope | `task-brief.md`, acceptance criteria, test strategy |
+| Planner | Split the feature into ordered execution chunks (ECs) | `execution-plan.yaml` |
+| Designer | Convert one chunk's requirements into implementation-ready scope | `task-brief.md`, acceptance criteria, test strategy |
 | Design Reviewer | Find architecture gaps before coding begins | `design-review-report.md` |
 | Coder | Implement only the approved task brief | Source changes and `coder-report.md` |
 | Reviewer | Check correctness, scope, security, and project rules | `review-report.md` |
@@ -272,6 +284,32 @@ Everything remains local; no SaaS account, API key, or source upload is needed.
 
 Specialized prompts are also included for Mini-Coder fixes, re-verification,
 parallel review synthesis, and evolution value gating.
+
+Each chunk's artifacts live under `.thanos/<feature-id>/ec-<n>/` when a feature
+has more than one chunk (single-chunk features keep the flat layout). If a role
+hits a genuinely ambiguous decision it writes a `clarify.json` question and the
+run pauses for a human answer — in the TUI a popup lets you choose, or run
+`thanos clarify FEATURE_ID "<answer>"`. A project `.thanos/coding-style.md`, when
+present, is injected into the designer, coder, and reviewer prompts so generated
+code matches your conventions.
+
+## Working session UI
+
+The default experience (`thanos` or `thanos ui`) is a chat-first terminal app:
+
+- **Left** — the role-by-role agent conversation for the selected feature, with a
+  phase-flow strip (`planning → design → … → done`). Select bubbles with the
+  keyboard or mouse and copy them; press `ctrl+s` for native terminal text
+  selection.
+- **Right sidebar** — the THANOS logo, a clickable **Feature → EC tree** (each
+  chunk shows its status), the active model runner, and configured MCP servers.
+- **Command box** — type `/` for the full command palette (run, continue, new,
+  bugfix, runner, transition, prompt, status, scan, doctor, memory, skill,
+  plugin, lsp, mcp, find, copy, clear, help). Attach files by pasting a path or
+  referencing `@path`; they are passed to the agent as run context.
+
+Tree keys: `↑↓` move, `→/←` descend into / out of a feature's ECs, `enter` run,
+`x` remove an EC, `c` answer a clarification, `n` new feature, `tab` switch panes.
 
 ## Agent Skills from GitHub
 
@@ -392,7 +430,11 @@ and a failed process can restart from the latest validated phase.
 | `thanos new` | Create a feature specification |
 | `thanos bugfix` | Create a bugfix mapped to an existing feature |
 | `thanos run` | Run or resume the multi-agent workflow |
+| `thanos continue` | Resume a stalled feature from its last failed round |
 | `thanos status` | Display feature phase and round status |
+| `thanos plan ls\|add\|rm` | List, add, or remove a feature's execution chunks (ECs) |
+| `thanos clarify` | Answer a paused clarification and resume the run |
+| `thanos ask "<prompt>"` | Send a one-off prompt to the runner (headless, no pipeline) |
 | `thanos prompt` | Render a role prompt without executing a runner |
 | `thanos transition` | Apply a validated manual phase transition |
 | `thanos done` | Approve a pending feature |

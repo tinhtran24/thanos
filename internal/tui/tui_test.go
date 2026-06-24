@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/tinhtran/thanos/internal/model"
 	"github.com/tinhtran/thanos/internal/workspace"
 )
@@ -46,7 +46,7 @@ func TestViewRendersSessionFlowAndCapabilities(t *testing.T) {
 		t.Fatal(err)
 	}
 	ui.Update(tea.WindowSizeMsg{Width: 140, Height: 40})
-	view := ui.View()
+	view := ui.View().Content
 	for _, want := range []string{"THANOS", "Session UI", "CODE INTELLIGENCE", "LSP · go", "MCP · github"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view does not contain %q:\n%s", want, view)
@@ -108,23 +108,35 @@ func TestArrowKeysMoveSessionSelection(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ui.Update(tea.KeyMsg{Type: tea.KeyDown})
+	ui.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	if ui.cursor != 1 {
 		t.Fatalf("cursor = %d, want 1", ui.cursor)
 	}
-	ui.Update(tea.KeyMsg{Type: tea.KeyUp})
+	ui.Update(tea.KeyPressMsg{Code: tea.KeyUp})
 	if ui.cursor != 0 {
 		t.Fatalf("cursor = %d, want 0", ui.cursor)
 	}
-	ui.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
+	ui.Update(tea.KeyPressMsg{Code: '2', Text: "2"})
 	if ui.cursor != 1 {
 		t.Fatalf("cursor = %d after numeric selection, want 1", ui.cursor)
 	}
-	ui.Update(tea.MouseMsg{
-		X: 2, Y: 3, Button: tea.MouseButtonLeft, Action: tea.MouseActionPress,
-	})
+	// Clicking a feature row in the right sidebar selects it. Render once so the
+	// tree row geometry is known, then click the first feature-0 row.
+	ui.Update(tea.WindowSizeMsg{Width: 140, Height: 40})
+	_ = ui.View()
+	row0 := -1
+	for i, r := range ui.treeRows {
+		if r.FeatureIndex == 0 {
+			row0 = i
+			break
+		}
+	}
+	if row0 < 0 {
+		t.Fatal("no feature-0 row in the sidebar tree")
+	}
+	ui.Update(tea.MouseClickMsg{X: ui.sidebarX0, Y: ui.treeY0 + row0, Button: tea.MouseLeft})
 	if ui.cursor != 0 {
-		t.Fatalf("cursor = %d after mouse selection, want 0", ui.cursor)
+		t.Fatalf("cursor = %d after sidebar click, want 0", ui.cursor)
 	}
 }
 

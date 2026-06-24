@@ -3,7 +3,7 @@
 // for colors so the rest of the UI never hard-codes hex values.
 package styles
 
-import "github.com/charmbracelet/lipgloss"
+import "charm.land/lipgloss/v2"
 
 // Core palette. These are the interactive-TUI colors (distinct from the plain
 // CLI output palette in internal/ui).

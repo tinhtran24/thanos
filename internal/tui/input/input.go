@@ -7,9 +7,9 @@ package input
 import (
 	"strings"
 
-	"github.com/charmbracelet/bubbles/textinput"
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/tinhtran/thanos/internal/tui/styles"
 )
 
@@ -53,21 +53,40 @@ var Commands = []Command{
 
 // Model wraps a textinput plus completion state.
 type Model struct {
-	ti      textinput.Model
-	width   int
-	focused bool
+	ti         textinput.Model
+	width      int
+	focused    bool
+	noComplete bool // when true (form mode), suppress slash-command completions
 }
+
+// SetCommandMode toggles slash-command completions. Disable it while collecting
+// free-text form fields (title/description/acceptance).
+func (m *Model) SetCommandMode(on bool) { m.noComplete = !on }
+
+// DefaultPlaceholder is shown when the box is idle (command mode).
+const DefaultPlaceholder = "type a / command (enter runs the selected session)"
 
 // New returns a blurred command box.
 func New() Model {
 	ti := textinput.New()
 	ti.Prompt = "❯ "
-	ti.Placeholder = "type a / command (enter runs the selected session)"
-	ti.PromptStyle = styles.AccentS
-	ti.TextStyle = lipgloss.NewStyle().Foreground(styles.Text)
-	ti.PlaceholderStyle = styles.MutedS
+	ti.Placeholder = DefaultPlaceholder
+	// Use the real terminal cursor (crush's pattern): the parent surfaces it via
+	// the View.Cursor field, offset to the input's on-screen position.
+	ti.SetVirtualCursor(false)
 	return Model{ti: ti}
 }
+
+// SetPrompt changes the leading prompt string.
+func (m *Model) SetPrompt(p string) { m.ti.Prompt = p }
+
+// SetPlaceholder changes the placeholder text shown when empty.
+func (m *Model) SetPlaceholder(s string) { m.ti.Placeholder = s }
+
+// Cursor returns the text caret, positioned relative to the input's own view
+// (X already includes the prompt width). The caller offsets it to screen
+// coordinates and assigns it to the Bubble Tea View. Returns nil when blurred.
+func (m *Model) Cursor() *tea.Cursor { return m.ti.Cursor() }
 
 // Focus gives the box keyboard focus.
 func (m *Model) Focus() tea.Cmd { m.focused = true; return m.ti.Focus() }
@@ -79,7 +98,7 @@ func (m *Model) Blur() { m.focused = false; m.ti.Blur() }
 func (m *Model) Focused() bool { return m.focused }
 
 // SetWidth sizes the box.
-func (m *Model) SetWidth(w int) { m.width = w; m.ti.Width = max(4, w-4) }
+func (m *Model) SetWidth(w int) { m.width = w; m.ti.SetWidth(max(4, w-4)) }
 
 // Value returns the current text.
 func (m *Model) Value() string { return m.ti.Value() }
@@ -102,6 +121,9 @@ func (m *Model) Update(msg tea.Msg) tea.Cmd {
 
 // matches returns commands whose name has the current token as a prefix.
 func (m *Model) matches() []Command {
+	if m.noComplete {
+		return nil
+	}
 	val := strings.TrimSpace(m.ti.Value())
 	if !strings.HasPrefix(val, "/") || strings.Contains(val, " ") {
 		return nil

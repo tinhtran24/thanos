@@ -67,7 +67,7 @@ func TestSelectAtViewportRowSelectsTopBubble(t *testing.T) {
 	}
 
 	// Extending downward should grow the range to include the second bubble.
-	m.ExtendAtViewportRow(m.vp.Height - 1)
+	m.ExtendAtViewportRow(m.vp.Height() - 1)
 	if text := m.SelectedText(); !strings.Contains(text, "second bubble body") {
 		t.Fatalf("extended selection = %q, want both bubbles", text)
 	}

@@ -1,55 +1,55 @@
 # Thanos Codebase Graph
 
-Generated: 2026-06-24T02:56:23Z
+Generated: 2026-06-24T04:21:45Z
 
-- Files: 48
-- Symbols: 499
-- Relationships: 1760
+- Files: 49
+- Symbols: 566
+- Relationships: 2018
 
 ## Languages
 
-- go: 48 files
+- go: 49 files
 
 ## Key Symbols
 
 - `main` (function) — cmd/thanos/main.go:15
-- `appendUniqueMarketplace` (function) — internal/cli/cli.go:1046
-- `appendUniquePlugin` (function) — internal/cli/cli.go:1055
-- `runExternalCommand` (function) — internal/cli/cli.go:1064
-- `printExecLog` (function) — internal/cli/cli.go:1087
-- `parseSkillRoles` (function) — internal/cli/cli.go:1091
-- `phaseForRole` (function) — internal/cli/cli.go:1123
-- `splitList` (function) — internal/cli/cli.go:1144
-- `splitCSV` (function) — internal/cli/cli.go:1154
-- `detectedLSPs` (function) — internal/cli/cli.go:1164
-- `defaultRunnerArgs` (function) — internal/cli/cli.go:1182
-- `defaultRunnerAgent` (function) — internal/cli/cli.go:1193
-- `defaultSkillsDir` (function) — internal/cli/cli.go:1208
-- `intersperseFlags` (function) — internal/cli/cli.go:1219
-- `printHelp` (function) — internal/cli/cli.go:1244
-- `modelGraph` (struct) — internal/cli/cli.go:180
-- `runScan` (function) — internal/cli/cli.go:185
-- `runNew` (function) — internal/cli/cli.go:228
-- `runBugfix` (function) — internal/cli/cli.go:308
-- `runStatus` (function) — internal/cli/cli.go:318
+- `runMCP` (function) — internal/cli/cli.go:1013
+- `runInit` (function) — internal/cli/cli.go:102
+- `syncSkillsToRunners` (function) — internal/cli/cli.go:1065
+- `syncSkillsToRunner` (function) — internal/cli/cli.go:1074
+- `discoverSkillFiles` (function) — internal/cli/cli.go:1128
+- `runPlugin` (function) — internal/cli/cli.go:1158
+- `appendUniqueMarketplace` (function) — internal/cli/cli.go:1214
+- `appendUniquePlugin` (function) — internal/cli/cli.go:1223
+- `runExternalCommand` (function) — internal/cli/cli.go:1232
+- `printExecLog` (function) — internal/cli/cli.go:1255
+- `parseSkillRoles` (function) — internal/cli/cli.go:1259
+- `phaseForRole` (function) — internal/cli/cli.go:1291
+- `splitList` (function) — internal/cli/cli.go:1312
+- `splitCSV` (function) — internal/cli/cli.go:1322
+- `detectedLSPs` (function) — internal/cli/cli.go:1332
+- `defaultRunnerArgs` (function) — internal/cli/cli.go:1350
+- `defaultRunnerAgent` (function) — internal/cli/cli.go:1361
+- `defaultSkillsDir` (function) — internal/cli/cli.go:1376
+- `intersperseFlags` (function) — internal/cli/cli.go:1387
 
 ## Hub Symbols
 
-- `DotDir` — 43 incoming relationships (internal/workspace/workspace.go:28)
-- `ReadConfig` — 24 incoming relationships (internal/workspace/workspace.go:46)
-- `Open` — 20 incoming relationships (internal/workspace/workspace.go:24)
-- `SaveFeature` — 16 incoming relationships (internal/workspace/workspace.go:62)
-- `printExecLog` — 16 incoming relationships (internal/cli/cli.go:1087)
+- `DotDir` — 47 incoming relationships (internal/workspace/workspace.go:28)
+- `ReadConfig` — 25 incoming relationships (internal/workspace/workspace.go:46)
+- `Open` — 23 incoming relationships (internal/workspace/workspace.go:24)
+- `contains` — 22 incoming relationships (internal/orchestrator/orchestrator_test.go:44)
+- `RuntimeDir` — 21 incoming relationships (internal/workspace/workspace.go:116)
+- `printExecLog` — 19 incoming relationships (internal/cli/cli.go:1255)
+- `SaveFeature` — 18 incoming relationships (internal/workspace/workspace.go:62)
+- `Truncate` — 16 incoming relationships (internal/tui/util/text.go:11)
 - `assertFramework` — 15 incoming relationships (internal/project/project_test.go:381)
-- `rerender` — 14 incoming relationships (internal/tui/chat/chat.go:275)
-- `Parse` — 14 incoming relationships (internal/tui/input/input.go:146)
-- `frameworkRoot` — 13 incoming relationships (internal/project/project_test.go:367)
-- `RuntimeDir` — 13 incoming relationships (internal/workspace/workspace.go:116)
+- `Parse` — 15 incoming relationships (internal/tui/input/input.go:168)
 
 ## Detected Conventions
 
 - **Go formatting and tests:** Go source is present; use gofmt and keep tests in *_test.go files beside the package.
 - **Test organization:** 13 test files use language-native test naming.
-- **Internal package boundary:** 47 files live under internal/; keep non-public implementation there.
+- **Internal package boundary:** 48 files live under internal/; keep non-public implementation there.
 
 Full machine-readable graph: `.thanos/codebase/graph.json`.

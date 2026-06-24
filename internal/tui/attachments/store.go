@@ -4,6 +4,7 @@
 package attachments
 
 import (
+	"fmt"
 	"mime"
 	"os"
 	"path/filepath"
@@ -63,8 +64,55 @@ func SaveBytes(ws *workspace.Workspace, featureID, name string, data []byte) (At
 }
 
 // Reference returns the agent-facing reference for an attachment (its path
-// relative to the runtime dir). Wiring this into prompts/runner is a follow-up.
+// relative to the runtime dir).
 func Reference(a Attachment) string { return a.RelPath }
+
+// WriteManifest records staged attachments and @-file references into
+// .thanos/<feature>/context/attachments.md, which prompts.Render references so
+// the agent reads them. Small text files are inlined; large/binary ones are
+// listed by path. Returns false when there is nothing to write.
+func WriteManifest(ws *workspace.Workspace, featureID string, items []Attachment, refs []string) (bool, error) {
+	if len(items) == 0 && len(refs) == 0 {
+		return false, nil
+	}
+	dir := filepath.Join(ws.RuntimeDir(featureID), "context")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return false, err
+	}
+	var b strings.Builder
+	b.WriteString("# Attached context\n\nThe user attached these files/notes for this task.\n")
+	for _, a := range items {
+		fmt.Fprintf(&b, "\n## %s (`%s`)\n", a.Name, a.RelPath)
+		if !a.IsImage && a.Size > 0 && a.Size <= 64*1024 {
+			if data, err := os.ReadFile(a.AbsPath); err == nil {
+				b.WriteString("```\n")
+				b.Write(data)
+				b.WriteString("\n```\n")
+				continue
+			}
+		}
+		fmt.Fprintf(&b, "(see file at `.thanos/%s/%s`)\n", featureID, a.RelPath)
+	}
+	for _, ref := range refs {
+		fmt.Fprintf(&b, "\n## @%s\n", ref)
+		abs := filepath.Join(ws.Root, ref)
+		if info, err := os.Stat(abs); err == nil && !info.IsDir() && info.Size() <= 64*1024 {
+			if data, err := os.ReadFile(abs); err == nil {
+				b.WriteString("```\n")
+				b.Write(data)
+				b.WriteString("\n```\n")
+				continue
+			}
+		}
+		fmt.Fprintf(&b, "(workspace file `%s`)\n", ref)
+	}
+	return true, os.WriteFile(filepath.Join(dir, "attachments.md"), []byte(b.String()), 0o644)
+}
+
+// ClearManifest removes the context manifest for a feature.
+func ClearManifest(ws *workspace.Workspace, featureID string) {
+	_ = os.Remove(filepath.Join(ws.RuntimeDir(featureID), "context", "attachments.md"))
+}
 
 func sanitize(name string) string {
 	name = filepath.Base(strings.TrimSpace(name))

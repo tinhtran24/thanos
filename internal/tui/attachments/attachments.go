@@ -3,7 +3,7 @@ package attachments
 import (
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 	"github.com/tinhtran/thanos/internal/tui/styles"
 	"github.com/tinhtran/thanos/internal/tui/util"
 )
