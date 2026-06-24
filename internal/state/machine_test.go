@@ -9,13 +9,10 @@ import (
 func TestTransitionFlow(t *testing.T) {
 	s := model.State{Phase: model.PhaseInit, MaxRounds: 2}
 	for _, phase := range []model.Phase{
-		model.PhaseDesign,
-		model.PhaseDesignReview,
+		model.PhasePlan,
 		model.PhaseCode,
-		model.PhaseReview,
 		model.PhaseTest,
-		model.PhaseDeepReview,
-		model.PhaseAccept,
+		model.PhaseOverview,
 		model.PhasePending,
 		model.PhaseDone,
 	} {
@@ -38,7 +35,7 @@ func TestInvalidTransition(t *testing.T) {
 }
 
 func TestRoundLimitEscalates(t *testing.T) {
-	s := model.State{Phase: model.PhaseReview, Round: 2, MaxRounds: 2}
+	s := model.State{Phase: model.PhaseTest, Round: 2, MaxRounds: 2}
 	got, err := Transition(s, model.PhaseAmend)
 	if err != nil {
 		t.Fatal(err)
@@ -72,7 +69,7 @@ func TestResumeFailedRound(t *testing.T) {
 func TestResumeFailedRoundRequiresAttention(t *testing.T) {
 	_, err := ResumeFailedRound(model.State{
 		FeatureID: "F002-test",
-		Phase:     model.PhaseReview,
+		Phase:     model.PhaseTest,
 		Round:     3,
 	}, 3)
 	if err == nil {
@@ -81,7 +78,7 @@ func TestResumeFailedRoundRequiresAttention(t *testing.T) {
 }
 
 func TestPerECTransitions(t *testing.T) {
-	// Init → Plan → Design begins the first chunk.
+	// Init → Plan → Code begins the first chunk.
 	s := model.State{Phase: model.PhaseInit, MaxRounds: 3}
 	var err error
 	if s, err = Transition(s, model.PhasePlan); err != nil {
@@ -90,11 +87,11 @@ func TestPerECTransitions(t *testing.T) {
 	if s.Role != model.RolePlanner {
 		t.Fatalf("plan role = %q, want planner", s.Role)
 	}
-	if s, err = Transition(s, model.PhaseDesign); err != nil {
+	if s, err = Transition(s, model.PhaseCode); err != nil {
 		t.Fatal(err)
 	}
-	// Walk EC-1 to a deep-review pass, accumulating a round via amend.
-	for _, p := range []model.Phase{model.PhaseDesignReview, model.PhaseCode, model.PhaseReview, model.PhaseAmend, model.PhaseReview, model.PhaseTest, model.PhaseDeepReview} {
+	// Walk EC-1 through a rejected test and amended coding pass.
+	for _, p := range []model.Phase{model.PhaseTest, model.PhaseAmend, model.PhaseTest} {
 		if s, err = Transition(s, p); err != nil {
 			t.Fatalf("EC1 -> %s: %v", p, err)
 		}
@@ -102,15 +99,17 @@ func TestPerECTransitions(t *testing.T) {
 	if s.Round != 2 {
 		t.Fatalf("EC1 round = %d, want 2 (one amend)", s.Round)
 	}
-	// DeepReview pass on a non-last chunk advances to Design (next EC) and resets round.
-	if s, err = Transition(s, model.PhaseDesign); err != nil {
+	// A passing EC test advances to Code for the next EC. The orchestrator resets
+	// Round before this transition.
+	s.Round = 0
+	if s, err = Transition(s, model.PhaseCode); err != nil {
 		t.Fatalf("advance to next EC: %v", err)
 	}
-	if s.Round != 0 {
-		t.Fatalf("round after starting EC2 = %d, want 0", s.Round)
+	if s.Round != 1 {
+		t.Fatalf("round after starting EC2 = %d, want 1", s.Round)
 	}
-	// Walk EC-2 to deep-review, then finish via Accept (last chunk).
-	for _, p := range []model.Phase{model.PhaseDesignReview, model.PhaseCode, model.PhaseReview, model.PhaseTest, model.PhaseDeepReview, model.PhaseAccept, model.PhasePending, model.PhaseDone} {
+	// Walk EC-2 through tests, overview, human review, and done.
+	for _, p := range []model.Phase{model.PhaseTest, model.PhaseOverview, model.PhasePending, model.PhaseDone} {
 		if s, err = Transition(s, p); err != nil {
 			t.Fatalf("EC2 -> %s: %v", p, err)
 		}

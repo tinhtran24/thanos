@@ -31,6 +31,7 @@ func (m *modelUI) relayout() {
 	if m.width == 0 || m.height == 0 {
 		return
 	}
+	m.input.SetMaxHeight(util.Min(6, util.Max(1, m.height/3)))
 	m.input.SetWidth(m.width - 2)
 	if m.picker != nil {
 		m.picker.SetSize(m.width, m.height)
@@ -51,7 +52,7 @@ func (m *modelUI) View() tea.View {
 	// Place the real terminal cursor at the command box when it has focus
 	// (crush's pattern). The input's cursor X already includes the prompt width;
 	// the bottom bar is rendered at column 0, so only the row needs offsetting.
-	if m.focus == focusInput && m.picker == nil && !m.showHelp {
+	if m.focus == focusInput && m.picker == nil && m.confirm == nil && m.clarify == nil && !m.showHelp {
 		if cur := m.input.Cursor(); cur != nil {
 			cur.Y += m.inputY0
 			view.Cursor = cur
@@ -70,34 +71,47 @@ func (m *modelUI) render() string {
 	bottom := m.renderBottom()
 
 	bodyTop := lipgloss.Height(header)
-	bodyHeight := util.Max(4, m.height-lipgloss.Height(header)-lipgloss.Height(footer)-lipgloss.Height(bottom)-3)
+	bodyHeight := util.Max(0, m.height-lipgloss.Height(header)-lipgloss.Height(footer)-lipgloss.Height(bottom)-3)
 
 	sidebarW := m.sidebarWidth()
 	chatWidth := util.Max(30, m.width-sidebarW-paneGap)
 
 	// Chat is the main pane on the LEFT; the feature/EC tree sidebar is on the RIGHT.
 	m.chatH = 0
-	chatPanel := m.renderPanel(m.renderCenter(chatWidth-4, bodyHeight), chatWidth, bodyHeight, m.focus == focusChat)
+	center := m.renderCenter(chatWidth-4, bodyHeight)
+	right := m.renderRightSidebar(sidebarW-4, bodyHeight)
+	chatPanel := m.renderPanel(center, chatWidth, bodyHeight, m.focus == focusChat)
 	m.chatX0 = 2 // left panel border + padding
 	m.chatY0 = bodyTop + 1 + m.centerHeaderLines
 	m.chatW = chatWidth - 4
 
-	sidePanel := m.renderPanel(m.renderRightSidebar(sidebarW-4, bodyHeight), sidebarW, bodyHeight, m.focus == focusSessions)
+	sidePanel := m.renderPanel(right, sidebarW, bodyHeight, m.focus == focusSessions)
 	// Tree row geometry (border + logo(2) + blank(1) inside the right panel).
 	m.sidebarX0 = chatWidth + paneGap + 2
 	m.sidebarW = sidebarW - 4
 	m.treeY0 = bodyTop + 1 + 3
 
-	body := lipgloss.JoinHorizontal(lipgloss.Top, chatPanel, strings.Repeat(" ", paneGap), sidePanel)
+	body := ""
+	if bodyHeight > 0 {
+		body = lipgloss.JoinHorizontal(lipgloss.Top, chatPanel, strings.Repeat(" ", paneGap), sidePanel)
+	}
 
-	// The command box is the last line of the bottom bar; record its screen row
-	// so View can position the real terminal cursor there.
-	m.inputY0 = lipgloss.Height(header) + lipgloss.Height(body) + lipgloss.Height(bottom) - 1
+	// Record the textarea origin after any attachment and completion rows.
+	m.inputY0 = lipgloss.Height(header) + m.inputYOffset
+	sections := []string{header}
+	if body != "" {
+		m.inputY0 += lipgloss.Height(body)
+		sections = append(sections, body)
+	}
+	sections = append(sections, bottom, footer)
 
-	screen := header + "\n" + body + "\n" + bottom + "\n" + footer
+	screen := strings.Join(sections, "\n")
 
 	if m.showHelp {
 		screen = util.Overlay(screen, dialog.RenderHelp(helpEntries()), m.width, m.height)
+	}
+	if m.confirm != nil {
+		screen = util.Overlay(screen, m.confirm.View(), m.width, m.height)
 	}
 	if m.clarify != nil {
 		screen = util.Overlay(screen, m.clarify.View(), m.width, m.height)
@@ -109,11 +123,30 @@ func (m *modelUI) render() string {
 }
 
 func (m *modelUI) renderPanel(content string, width, height int, focused bool) string {
+	if height <= 0 {
+		return ""
+	}
+	if height < 3 {
+		lines := strings.Split(fitPanelHeight(content, height), "\n")
+		for i := range lines {
+			lines[i] = util.Truncate(lines[i], util.Max(1, width))
+		}
+		return strings.Join(lines, "\n")
+	}
+	content = fitPanelHeight(content, util.Max(1, height-2))
 	style := styles.Panel(width, height)
 	if focused {
 		style = styles.FocusedPanel(width, height)
 	}
 	return style.Render(content)
+}
+
+func fitPanelHeight(content string, height int) string {
+	lines := strings.Split(content, "\n")
+	if len(lines) > height {
+		lines = lines[:height]
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m *modelUI) renderHeader() string {
@@ -188,7 +221,7 @@ func (m *modelUI) renderCenter(width, bodyHeight int) string {
 		metaText += "  ·  bugfix of " + feature.Parent
 	}
 	meta := styles.MutedS.Render(util.Truncate(metaText, width))
-	flow := chat.RenderFlow(current.Phase, width)
+	flow := chat.RenderWorkflow(current, width)
 
 	headerLines := lipgloss.Height(title) + lipgloss.Height(meta) + lipgloss.Height(flow) + 1
 	chatHeight := util.Max(1, (bodyHeight-2)-headerLines)
@@ -273,10 +306,14 @@ func (m *modelUI) renderSidebar(width int) string {
 func (m *modelUI) renderBottom() string {
 	width := m.width - 2
 	var parts []string
+	m.inputYOffset = 0
 	if strip := m.attach.View(width); strip != "" {
 		parts = append(parts, strip)
+		m.inputYOffset += lipgloss.Height(strip)
 	}
-	parts = append(parts, m.input.View(width))
+	composer := m.input.View(width)
+	m.inputYOffset += lipgloss.Height(composer) - m.input.Height()
+	parts = append(parts, composer)
 	return lipgloss.NewStyle().Width(m.width).Render(strings.Join(parts, "\n"))
 }
 
@@ -294,11 +331,11 @@ func (m *modelUI) renderFooter() string {
 	var hint string
 	switch {
 	case m.create.active:
-		hint = fmt.Sprintf("new session — step %d/3 · enter: save & next · esc: cancel", m.create.step+1)
+		hint = fmt.Sprintf("new session — step %d/3 · paste single/multiline · enter: save & next · esc: cancel", m.create.step+1)
 	case m.focus == focusChat:
 		hint = "↑↓ pick · K/J range · y copy · click/drag mouse-copy · esc back · tab input"
 	case m.focus == focusInput:
-		hint = "enter submit · esc cancel · type / for all commands · tab cycle"
+		hint = "paste single/multiline (line breaks kept) · enter submit · esc cancel · / commands · tab cycle"
 	default:
 		hint = "↑↓ nav · →← EC · enter run · n new · x rm-EC · c clarify · m runner · / cmd · tab chat · ? help"
 	}

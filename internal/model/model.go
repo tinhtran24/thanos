@@ -14,6 +14,7 @@ const (
 	PhaseTest         Phase = "testing"
 	PhaseDeepReview   Phase = "deep-reviewing"
 	PhaseAmend        Phase = "amending"
+	PhaseOverview     Phase = "overview"
 	PhaseAccept       Phase = "accepting"
 	PhasePending      Phase = "pending-review"
 	PhaseDone         Phase = "done"
@@ -147,8 +148,8 @@ type State struct {
 }
 
 // ExecutionChunk is one ordered slice of a feature ("EC"). The planner role
-// splits a feature into chunks; each chunk runs the full design→…→deep-review
-// cycle to completion before the next chunk starts.
+// splits a feature into chunks; each chunk is coded and tested before the next
+// chunk starts.
 type ExecutionChunk struct {
 	Index       int      `yaml:"index" json:"index"`
 	ID          string   `yaml:"id" json:"id"`

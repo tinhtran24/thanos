@@ -8,21 +8,23 @@ import (
 )
 
 var transitions = map[model.Phase][]model.Phase{
-	model.PhaseInit:         {model.PhasePlan, model.PhaseDesign},
-	model.PhasePlan:         {model.PhaseDesign},
-	model.PhaseDesign:       {model.PhaseDesignReview},
+	model.PhaseInit:     {model.PhasePlan, model.PhaseCode},
+	model.PhasePlan:     {model.PhaseCode},
+	model.PhaseCode:     {model.PhaseTest},
+	model.PhaseAmend:    {model.PhaseTest},
+	model.PhaseTest:     {model.PhaseCode, model.PhaseAmend, model.PhaseOverview},
+	model.PhaseOverview: {model.PhasePending},
+	model.PhasePending:  {model.PhaseDone},
+
+	// Legacy transitions remain valid so sessions created by older versions can
+	// be resumed and moved into the simplified workflow.
+	model.PhaseDesign:       {model.PhaseDesignReview, model.PhaseCode},
 	model.PhaseDesignReview: {model.PhaseCode, model.PhaseDesign},
-	model.PhaseCode:         {model.PhaseReview},
-	model.PhaseReview:       {model.PhaseTest, model.PhaseAmend},
-	model.PhaseAmend:        {model.PhaseReview},
-	model.PhaseTest:         {model.PhaseDeepReview, model.PhaseAmend},
-	// DeepReview pass either advances to the next chunk (Design) or, for the last
-	// chunk, finishes the feature (Accept). Amend loops back on failure.
-	model.PhaseDeepReview: {model.PhaseAccept, model.PhaseDesign, model.PhaseAmend},
-	model.PhaseAccept:     {model.PhasePending},
-	model.PhasePending:    {model.PhaseDone},
-	model.PhaseBlocked:    {model.PhasePlan, model.PhaseDesign, model.PhaseDesignReview, model.PhaseCode, model.PhaseReview, model.PhaseTest, model.PhaseDeepReview, model.PhaseAccept},
-	model.PhaseAttention:  {model.PhasePlan, model.PhaseDesign, model.PhaseCode},
+	model.PhaseReview:       {model.PhaseCode, model.PhaseTest, model.PhaseAmend},
+	model.PhaseDeepReview:   {model.PhaseOverview, model.PhaseAccept, model.PhaseCode, model.PhaseAmend},
+	model.PhaseAccept:       {model.PhasePending},
+	model.PhaseBlocked:      {model.PhasePlan, model.PhaseCode, model.PhaseTest, model.PhaseOverview},
+	model.PhaseAttention:    {model.PhasePlan, model.PhaseCode},
 }
 
 func CanTransition(from, to model.Phase) bool {
@@ -51,15 +53,15 @@ func Transition(current model.State, to model.Phase) (model.State, error) {
 			current.Reason = "maximum amendment rounds reached"
 		}
 	}
-	// Entering Design begins a (new) execution chunk: reset the per-chunk round.
-	if to == model.PhaseDesign {
-		current.Round = 0
-	}
+	// The orchestrator resets Round before starting a new EC. Other entries into
+	// Code (legacy migration and continue) preserve the current retry round.
 	if to == model.PhaseCode && current.Round == 0 {
 		current.Round = 1
 	}
 	current.Phase = to
-	current.Role = RoleForPhase(to)
+	if to != model.PhaseBlocked && to != model.PhaseAttention {
+		current.Role = RoleForPhase(to)
+	}
 	current.Active = to != model.PhaseDone && to != model.PhasePending
 	current.UpdatedAt = time.Now().UTC()
 	return current, nil
@@ -95,6 +97,8 @@ func RoleForPhase(phase model.Phase) model.Role {
 		return model.RoleReviewer
 	case model.PhaseTest:
 		return model.RoleTester
+	case model.PhaseOverview:
+		return model.RoleAcceptor
 	case model.PhaseDeepReview:
 		return model.RoleDeepReviewer
 	case model.PhaseAccept:

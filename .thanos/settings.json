@@ -3,17 +3,34 @@
     "name": "thanos",
     "description": "",
     "language": "go",
-    "build": ["go build ./..."],
-    "test": ["go test ./..."],
-    "lint": ["go vet ./..."],
-    "rules": ["Keep role outputs isolated in .thanos.", "Do not bypass the deterministic phase state machine.", "Every implementation change requires objective test evidence."]
+    "build": [
+      "go build ./..."
+    ],
+    "test": [
+      "go test ./..."
+    ],
+    "lint": [
+      "go vet ./..."
+    ],
+    "rules": [
+      "Keep role outputs isolated in .thanos.",
+      "Do not bypass the deterministic phase state machine.",
+      "Every implementation change requires objective test evidence."
+    ]
   },
   "default_runner": "codex",
-  "max_rounds": 10,
+  "max_rounds": 3,
   "runners": {
     "codex": {
       "command": "codex",
-      "args": ["exec", "--full-auto", "-"]
+      "args": [
+        "exec",
+        "--full-auto",
+        "-"
+      ],
+      "agent": "codex",
+      "skills_dir": ".agents/skills"
     }
-  }
+  },
+  "locale": "en"
 }

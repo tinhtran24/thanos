@@ -4,7 +4,7 @@ Thanos is a multi-role AI development framework written in Go. It splits the
 software engineering loop into isolated specialist phases:
 
 ```
-Design -> Design Review -> Code -> Review -> Test -> Deep Review -> Accept
+Planning -> Coding -> EC Test -> Overview -> Human Review -> Done
                               ^       |        |          |
                               +-------+--------+----------+
                                       Amend
@@ -28,7 +28,7 @@ with distinct strengths converge to conquer complexity.
   feature relationships, and affected paths
 - Bugfix-to-feature mapping with inherited impact context
 - Full prompt suite derived from the upstream 4x role templates
-- Designer, Design Reviewer, Coder, Reviewer, Tester, Deep Reviewer, and Acceptor pipeline
+- Planner, Coder, Tester, and Overview pipeline
 - Mini-Coder, Re-Verifier, Synthesizer, and Gate prompts for specialized workflows
 - File-based `.thanos/` protocol for auditability and crash recovery
 - Local codebase graph with symbols, calls, imports, tests, hubs, and conventions
@@ -80,19 +80,19 @@ same session at its current validated phase.
 
 `internal/orchestrator/orchestrator.go` first runs the **planner** role, which
 writes `execution-plan.yaml` (`model.ExecutionPlan` → `[]model.ExecutionChunk`).
-The orchestrator then iterates the chunks: each EC runs the full
-`design → design-review → code ↔ amend → review → test → deep-review` cycle to a
-passing deep review before the next EC starts; after the last EC the feature-level
-`accept` synthesizes results and moves to `pending-review`.
+The orchestrator then iterates the chunks: each EC runs
+`code ↔ EC test` until its acceptance cases pass. After the last EC, Overview
+synthesizes results and moves the feature to `pending-review`.
 
 - `model.State` gains `ECIndex` (1-based; 0 during planning), `ECTotal`, `ECID`;
-  `Round` is the **per-EC** amend counter, reset when a chunk's design begins.
+  `Round` is the **per-EC** amend counter, reset when a chunk's coding begins.
 - Artifacts are EC-scoped via `ec-<i>/…` when `ECTotal > 1`; a single implicit
   chunk keeps the flat feature-root layout (backward compatible). Helpers
   `ecDir`/`ecPrefix`/`ecJoin` build the paths; prompts receive the prefix as
   `Data.ECPrefix` and the chunk as `Data.ExecutionChunk`.
-- State-machine additions (`internal/state/machine.go`): `Init → Plan`,
-  `Plan → Design`, and `DeepReview → {Accept, Design (next EC), Amend}`.
+- State-machine flow (`internal/state/machine.go`): `Init → Plan → Code → Test`;
+  a failed test enters `Amend` and re-runs coding, while a passing test starts
+  the next EC or advances to `Overview`.
 
 ### Clarification protocol
 
@@ -106,7 +106,7 @@ proceeds. Paths are EC-scoped like other chunk artifacts.
 ### Coding style & attachments
 
 If `.thanos/coding-style.md` exists it is loaded into `prompts.Data.CodingStyle`
-and injected into the designer/coder/reviewer templates. Before a run the TUI
+and injected into the planner/coder templates. Before a run the TUI
 writes staged attachments and `@`-file references to
 `.thanos/<id>/context/attachments.md`; `prompts.Render` references it (EC-level
 overrides feature-level) so the agent reads it as primary context.
@@ -127,7 +127,7 @@ accepted work, resolves the connected feature context, and expands known paths
 through code-graph relationships. The resulting impact map is appended to every
 role prompt under `Persistent Feature Memory`.
 
-The Acceptor must write:
+The Overview role must write:
 
 ```json
 {
@@ -267,23 +267,17 @@ configured executables exist.
     state.json               # includes ec_index / ec_total / ec_id
     events.jsonl             # role-start/end, transition, ec-start/end, clarify
     execution-plan.yaml      # the planner's ordered execution chunks (ECs)
-    final-report.md          # feature-level accept artifacts (after the last EC)
+    final-report.md          # feature-level overview after the last EC
     retro-learnings.json
     feature-memory.json
     ec-1/                    # per-chunk artifacts (only when >1 chunk)
-      task-brief.md
-      acceptance-criteria.md
-      test-strategy.yaml
-      design-review-report.md
       clarify.json           # written by a role when blocked; pauses the run
       clarify-answer.md      # written by `thanos clarify`; consumed on resume
       context/attachments.md # staged files / @-refs passed to the agent
       rounds/
         round-1/
           coder-report.md
-          review-report.md
           test-report.md
-          deep-review-report.md
     ec-2/
       ...
 ```

@@ -13,10 +13,9 @@ Title: {{.ExecutionChunk.Title}}
 Write .thanos/{{.Feature.ID}}/{{.ECPrefix}}rounds/round-{{.State.Round}}/coder-report.md.
 
 == Inputs ==
-- .thanos/{{.Feature.ID}}/{{.ECPrefix}}task-brief.md
-- .thanos/{{.Feature.ID}}/{{.ECPrefix}}acceptance-criteria.md
-- .thanos/{{.Feature.ID}}/{{.ECPrefix}}test-strategy.yaml
-{{if gt .State.Round 1}}- Previous round review and test reports under {{.ECPrefix}}rounds/round-{{sub .State.Round 1}}
+- .thanos/{{.Feature.ID}}/execution-plan.yaml
+- The feature description and acceptance criteria in the current prompt
+{{if gt .State.Round 1}}- Previous EC test report under {{.ECPrefix}}rounds/round-{{sub .State.Round 1}}
 {{end}}
 
 == Verify Commands ==
@@ -48,7 +47,7 @@ Do NOT guess. Write `.thanos/{{.Feature.ID}}/{{.ECPrefix}}clarify.json` as
 human answer, then read `.thanos/{{.Feature.ID}}/{{.ECPrefix}}clarify-answer.md` on resume.
 
 == Constraints ==
-- Stay within the task brief and declared feature scope.
+- Stay within the current execution chunk and declared feature scope.
 - Check every path in Persistent Feature Memory before concluding the fix is local.
 - Run verification after changes.
-- Do not modify acceptance criteria or other roles' reports.
+- Do not modify the execution plan or tester reports.

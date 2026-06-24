@@ -86,24 +86,12 @@ func (o *Orchestrator) Run(ctx context.Context, featureID, runnerOverride string
 			if err == nil {
 				current, err = o.beginExecutionPlan(feature, current)
 			}
-		case model.PhaseDesign:
-			o.ensureChunkDir(feature.ID, current)
-			err = o.executeRole(ctx, feature, config, current, runnerConfig, ec)
-			if err == nil {
-				err = requireArtifacts(o.Workspace, feature.ID, ecJoin(current, "task-brief.md"), ecJoin(current, "acceptance-criteria.md"), ecJoin(current, "test-strategy.yaml"))
-			}
-			if err == nil {
-				current, err = o.transition(current, model.PhaseDesignReview)
-			}
-		case model.PhaseDesignReview:
-			err = o.executeRole(ctx, feature, config, current, runnerConfig, ec)
-			if err == nil {
-				if verdictPass(o.Workspace, feature.ID, ecJoin(current, "design-review-report.md")) {
-					current, err = o.transition(current, model.PhaseCode)
-				} else {
-					current, err = o.transition(current, model.PhaseDesign)
-				}
-			}
+		case model.PhaseDesign, model.PhaseDesignReview:
+			current, err = o.transition(current, model.PhaseCode)
+		case model.PhaseReview:
+			current, err = o.transition(current, model.PhaseTest)
+		case model.PhaseDeepReview:
+			current, err = o.transition(current, model.PhaseOverview)
 		case model.PhaseCode, model.PhaseAmend:
 			o.ensureRoundDir(feature.ID, current)
 			err = o.executeRole(ctx, feature, config, current, runnerConfig, ec)
@@ -115,39 +103,19 @@ func (o *Orchestrator) Run(ctx context.Context, featureID, runnerOverride string
 				err = featuregraph.UpdateFromArtifacts(o.Workspace.DotDir(), feature)
 			}
 			if err == nil {
-				current, err = o.transition(current, model.PhaseReview)
-			}
-		case model.PhaseReview:
-			err = o.executeRole(ctx, feature, config, current, runnerConfig, ec)
-			if err == nil {
-				report := ecJoin(current, "rounds", fmt.Sprintf("round-%d", current.Round), "review-report.md")
-				if verdictPass(o.Workspace, feature.ID, report) {
-					current, err = o.transition(current, model.PhaseTest)
-				} else {
-					current, err = o.transition(current, model.PhaseAmend)
-				}
+				current, err = o.transition(current, model.PhaseTest)
 			}
 		case model.PhaseTest:
 			err = o.executeRole(ctx, feature, config, current, runnerConfig, ec)
 			if err == nil {
 				report := ecJoin(current, "rounds", fmt.Sprintf("round-%d", current.Round), "test-report.md")
 				if verdictPass(o.Workspace, feature.ID, report) {
-					current, err = o.transition(current, model.PhaseDeepReview)
-				} else {
-					current, err = o.transition(current, model.PhaseAmend)
-				}
-			}
-		case model.PhaseDeepReview:
-			err = o.executeRole(ctx, feature, config, current, runnerConfig, ec)
-			if err == nil {
-				report := ecJoin(current, "rounds", fmt.Sprintf("round-%d", current.Round), "deep-review-report.md")
-				if verdictPass(o.Workspace, feature.ID, report) {
 					current, err = o.finishChunkOrFeature(feature, current)
 				} else {
 					current, err = o.transition(current, model.PhaseAmend)
 				}
 			}
-		case model.PhaseAccept:
+		case model.PhaseOverview, model.PhaseAccept:
 			err = o.executeRole(ctx, feature, config, current, runnerConfig, ec)
 			if err == nil {
 				err = requireArtifacts(o.Workspace, feature.ID, "final-report.md", "retro-learnings.json", "feature-memory.json")
@@ -389,7 +357,7 @@ func (o *Orchestrator) markChunkStatus(id, chunkID, status string) {
 }
 
 // beginExecutionPlan loads the planner's chunks (synthesizing a single implicit
-// chunk if none were written) and starts the first chunk's design phase.
+// chunk if none were written) and starts coding the first chunk.
 func (o *Orchestrator) beginExecutionPlan(feature model.Feature, current model.State) (model.State, error) {
 	plan, err := o.Workspace.ReadPlan(feature.ID)
 	if err != nil {
@@ -415,11 +383,11 @@ func (o *Orchestrator) beginExecutionPlan(feature model.Feature, current model.S
 		Type: "ec-start", FeatureID: feature.ID, Timestamp: time.Now().UTC(),
 		Data: map[string]any{"ec_index": 1, "ec_total": current.ECTotal, "ec_id": current.ECID, "title": active[0].Title},
 	})
-	return o.transition(current, model.PhaseDesign)
+	return o.transition(current, model.PhaseCode)
 }
 
 // finishChunkOrFeature marks the current chunk done and either advances to the
-// next chunk's design phase or, for the last chunk, moves to feature accept.
+// next chunk's coding phase or, for the last chunk, creates the overview.
 func (o *Orchestrator) finishChunkOrFeature(feature model.Feature, current model.State) (model.State, error) {
 	o.markChunkStatus(feature.ID, current.ECID, "done")
 	_ = o.Workspace.AppendEvent(model.Event{
@@ -430,6 +398,7 @@ func (o *Orchestrator) finishChunkOrFeature(feature model.Feature, current model
 		plan, _ := o.Workspace.ReadPlan(feature.ID)
 		active := plan.ActiveChunks()
 		current.ECIndex++
+		current.Round = 0
 		if current.ECIndex-1 < len(active) {
 			current.ECID = active[current.ECIndex-1].ID
 			o.markChunkStatus(feature.ID, current.ECID, "active")
@@ -438,9 +407,9 @@ func (o *Orchestrator) finishChunkOrFeature(feature model.Feature, current model
 				Data: map[string]any{"ec_index": current.ECIndex, "ec_total": current.ECTotal, "ec_id": current.ECID, "title": active[current.ECIndex-1].Title},
 			})
 		}
-		return o.transition(current, model.PhaseDesign)
+		return o.transition(current, model.PhaseCode)
 	}
-	return o.transition(current, model.PhaseAccept)
+	return o.transition(current, model.PhaseOverview)
 }
 
 func requireArtifacts(ws *workspace.Workspace, id string, names ...string) error {

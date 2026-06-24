@@ -1303,7 +1303,7 @@ func phaseForRole(role model.Role) model.Phase {
 	case model.RoleDeepReviewer:
 		return model.PhaseDeepReview
 	case model.RoleAcceptor:
-		return model.PhaseAccept
+		return model.PhaseOverview
 	default:
 		return ""
 	}

@@ -7,10 +7,8 @@ Verify only this chunk's acceptance. All artifact paths below live under .thanos
 Write .thanos/{{.Feature.ID}}/{{.ECPrefix}}rounds/round-{{.State.Round}}/test-report.md.
 
 == Inputs ==
-- {{.ECPrefix}}acceptance-criteria.md
-- {{.ECPrefix}}test-strategy.yaml
+- execution-plan.yaml and the current EC acceptance list
 - {{.ECPrefix}}rounds/round-{{.State.Round}}/coder-report.md
-- {{.ECPrefix}}rounds/round-{{.State.Round}}/review-report.md
 
 == Project Verification Commands ==
 {{range .Config.Project.Build}}- {{.}}
@@ -25,7 +23,8 @@ Write .thanos/{{.Feature.ID}}/{{.ECPrefix}}rounds/round-{{.State.Round}}/test-re
 == Workflow ==
 1. List every acceptance criterion.
 2. Create the report with an empty results table.
-3. Execute the commands selected by test-strategy.yaml.
+3. Execute the relevant project verification commands and focused tests for
+   every criterion.
 4. Record actual evidence immediately after each criterion.
 5. Derive the verdict from the evidence.
 

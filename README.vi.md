@@ -182,7 +182,9 @@ Mặc định (`thanos` hoặc `thanos ui`) là một ứng dụng terminal lấ
 - **Sidebar bên phải** — logo THANOS, cây **Feature → EC** bấm được (mỗi EC hiển
   thị trạng thái), runner đang dùng và các MCP server.
 - **Ô lệnh** — gõ `/` để mở bảng lệnh đầy đủ; đính kèm tệp bằng cách dán đường dẫn
-  hoặc tham chiếu `@path` để truyền vào ngữ cảnh của agent.
+  hoặc tham chiếu `@path` để truyền vào ngữ cảnh của agent. Có thể dán văn bản
+  một dòng hoặc nhiều dòng trực tiếp vào ô soạn thảo; dấu xuống dòng được giữ
+  nguyên, và Enter sẽ gửi nội dung hoặc chuyển bước trong biểu mẫu đang mở.
 
 Phím cây: `↑↓` di chuyển, `→/←` vào/ra EC của feature, `enter` chạy, `x` xoá EC,
 `c` trả lời clarification, `n` tạo feature, `tab` đổi vùng.

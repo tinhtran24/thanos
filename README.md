@@ -11,23 +11,20 @@ Plan ─▶ split the feature into ordered execution chunks (EC-1, EC-2, …)
 
 then run EACH chunk to completion before the next one starts:
 
-  EC-n: Design → Design Review → Code → Review → Test → Deep Review
-                                   ↑        │       │          │
-                                   └────────┴───────┴──────────┘
-                                             Amend
+  EC-n: Code → EC Test
+          ↑       │
+          └───────┘
+           Amend
 
-after the last chunk: Accept → Human Review → Done
+after the last chunk: Overview → Human Review → Done
 ```
 
 A planning step first breaks a feature into ordered **execution chunks (ECs)**.
-Thanos drives EC-1 through the full cycle, then EC-2, and so on — so a large
-feature ships as a sequence of small, independently reviewed slices instead of
-one cycle that thrashes in the amend loop.
+Thanos drives EC-1 through coding and acceptance tests, then EC-2, and so on.
+Failed EC tests return directly to coding with evidence for the next round.
 
-Use Thanos when one AI agent is not enough. Instead of asking the same model to
-design, implement, review, and approve its own work, Thanos assigns each phase
-to an isolated role with explicit inputs, required outputs, and automated
-quality gates.
+Thanos assigns planning, implementation, testing, and final overview to explicit
+roles with required outputs and deterministic transitions.
 
 Thanos works with Codex, Claude Code, Cursor, Gemini CLI, and custom command-line
 AI runners. It also installs Agent Skills from GitHub, synchronizes skills
@@ -55,8 +52,8 @@ approval.
 
 ## Key Features
 
-- **Multi-agent software development:** dedicated Designer, Coder, Reviewer,
-  Tester, Deep Reviewer, and Acceptor roles.
+- **Focused agent workflow:** dedicated Planner, Coder, Tester, and Overview
+  roles without repeated design/review rounds.
 - **Deterministic quality gates:** legal phase transitions and required reports
   are enforced by Go code instead of prompts.
 - **AI runner agnostic:** use Codex, Claude Code, Cursor, Gemini CLI, or a custom
@@ -79,8 +76,8 @@ approval.
   reports under `.thanos/`.
 - **Local codebase graph:** indexes files, symbols, calls, imports, tests, hub
   symbols, and repository conventions for every AI role.
-- **Adversarial code review:** normal review and deep review catch different
-  classes of defects.
+- **EC acceptance testing:** every execution chunk must pass its acceptance
+  cases before the next chunk starts.
 - **Human approval:** completed AI work stops at `pending-review` until a human
   runs `thanos done`.
 - **GitHub Agent Skills:** search and install skills with the open
@@ -225,8 +222,7 @@ thanos memory F002
 
 Accepted features produce `.thanos/<feature-id>/feature-memory.json`. Thanos
 merges it into `.thanos/memory/feature-graph.json` and injects the resolved
-impact map into Designer, Coder, Reviewer, Tester, Deep Reviewer, and Acceptor
-prompts.
+impact map into Planner, Coder, Tester, and Overview prompts.
 
 ## LSP and MCP capabilities
 
@@ -273,14 +269,10 @@ Everything remains local; no SaaS account, API key, or source upload is needed.
 
 | Role | Responsibility | Main output |
 |---|---|---|
-| Planner | Split the feature into ordered execution chunks (ECs) | `execution-plan.yaml` |
-| Designer | Convert one chunk's requirements into implementation-ready scope | `task-brief.md`, acceptance criteria, test strategy |
-| Design Reviewer | Find architecture gaps before coding begins | `design-review-report.md` |
-| Coder | Implement only the approved task brief | Source changes and `coder-report.md` |
-| Reviewer | Check correctness, scope, security, and project rules | `review-report.md` |
-| Tester | Verify every acceptance criterion with evidence | `test-report.md` |
-| Deep Reviewer | Run adversarial, cross-file, and architectural review | `deep-review-report.md` |
-| Acceptor | Summarize readiness and unresolved issues | `final-report.md` |
+| Planner | Analyze the ticket and split it into implementation-ready EC tasks | `execution-plan.yaml` |
+| Coder | Implement the current EC; amend it when tests reject the result | Source changes and `coder-report.md` |
+| Tester | Run each EC's acceptance cases with evidence | `test-report.md` |
+| Overview | Summarize readiness, evidence, and unresolved issues | `final-report.md` |
 
 Specialized prompts are also included for Mini-Coder fixes, re-verification,
 parallel review synthesis, and evolution value gating.
@@ -290,23 +282,25 @@ has more than one chunk (single-chunk features keep the flat layout). If a role
 hits a genuinely ambiguous decision it writes a `clarify.json` question and the
 run pauses for a human answer — in the TUI a popup lets you choose, or run
 `thanos clarify FEATURE_ID "<answer>"`. A project `.thanos/coding-style.md`, when
-present, is injected into the designer, coder, and reviewer prompts so generated
-code matches your conventions.
+present, is injected into planner and coder prompts so generated code matches
+your conventions.
 
 ## Working session UI
 
 The default experience (`thanos` or `thanos ui`) is a chat-first terminal app:
 
 - **Left** — the role-by-role agent conversation for the selected feature, with a
-  phase-flow strip (`planning → design → … → done`). Select bubbles with the
-  keyboard or mouse and copy them; press `ctrl+s` for native terminal text
-  selection.
+  persistent multiline workflow panel (`planning → coding → EC tests → overview
+  → human review → done`). It shows completed, active, pending, rejected, and
+  blocked states above the scrollable chat output.
 - **Right sidebar** — the THANOS logo, a clickable **Feature → EC tree** (each
   chunk shows its status), the active model runner, and configured MCP servers.
 - **Command box** — type `/` for the full command palette (run, continue, new,
   bugfix, runner, transition, prompt, status, scan, doctor, memory, skill,
   plugin, lsp, mcp, find, copy, clear, help). Attach files by pasting a path or
-  referencing `@path`; they are passed to the agent as run context.
+  referencing `@path`; they are passed to the agent as run context. Paste
+  single-line or multiline text directly into the composer; line breaks are
+  preserved, and Enter submits or advances the active guided form.
 
 Tree keys: `↑↓` move, `→/←` descend into / out of a feature's ECs, `enter` run,
 `x` remove an EC, `c` answer a clarification, `n` new feature, `tab` switch panes.
@@ -403,19 +397,14 @@ operations in `.thanos/settings.json`.
 └── F001-oauth2-authentication/
     ├── state.json
     ├── events.jsonl
-    ├── task-brief.md
-    ├── acceptance-criteria.md
-    ├── test-strategy.yaml
-    ├── design-review-report.md
+    ├── execution-plan.yaml
     ├── final-report.md
     ├── retro-learnings.json
     ├── feature-memory.json
     └── rounds/
         └── round-1/
             ├── coder-report.md
-            ├── review-report.md
-            ├── test-report.md
-            └── deep-review-report.md
+            └── test-report.md
 ```
 
 The filesystem is the source of truth. Agents do not need shared hidden context,

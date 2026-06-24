@@ -5,7 +5,47 @@ import (
 	"testing"
 
 	"github.com/tinhtran/thanos/internal/model"
+	"github.com/tinhtran/thanos/internal/tui/util"
 )
+
+func TestRenderWorkflowStates(t *testing.T) {
+	tests := []struct {
+		name  string
+		state model.State
+		want  []string
+	}{
+		{
+			name:  "coding active",
+			state: model.State{Phase: model.PhaseCode, Round: 1},
+			want:  []string{"✓ Planning", "◆ Coding", "○ EC tests", "○ Overview"},
+		},
+		{
+			name:  "test rejected",
+			state: model.State{Phase: model.PhaseAmend, Round: 2},
+			want:  []string{"◆ Coding", "✕ EC tests", "Rejected; returning the EC to coding"},
+		},
+		{
+			name:  "tester blocked",
+			state: model.State{Phase: model.PhaseBlocked, Role: model.RoleTester, Reason: "test environment unavailable"},
+			want:  []string{"✓ Planning", "✓ Coding", "■ EC tests", "test environment unavailable"},
+		},
+		{
+			name:  "done completed",
+			state: model.State{Phase: model.PhaseDone},
+			want:  []string{"✓ Planning", "✓ Overview", "✓ Human review", "✓ Done"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := util.StripANSI(RenderWorkflow(tt.state, 80))
+			for _, want := range tt.want {
+				if !strings.Contains(got, want) {
+					t.Fatalf("workflow missing %q:\n%s", want, got)
+				}
+			}
+		})
+	}
+}
 
 func TestOnEventSegmentsRolesIntoBubbles(t *testing.T) {
 	m := New()

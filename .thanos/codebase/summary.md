@@ -1,14 +1,14 @@
 # Thanos Codebase Graph
 
-Generated: 2026-06-24T04:21:45Z
+Generated: 2026-06-24T08:24:58Z
 
-- Files: 49
-- Symbols: 566
-- Relationships: 2018
+- Files: 50
+- Symbols: 610
+- Relationships: 2192
 
 ## Languages
 
-- go: 49 files
+- go: 50 files
 
 ## Key Symbols
 
@@ -36,20 +36,20 @@ Generated: 2026-06-24T04:21:45Z
 ## Hub Symbols
 
 - `DotDir` — 47 incoming relationships (internal/workspace/workspace.go:28)
+- `Value` — 26 incoming relationships (internal/tui/input/input.go:129)
 - `ReadConfig` — 25 incoming relationships (internal/workspace/workspace.go:46)
-- `Open` — 23 incoming relationships (internal/workspace/workspace.go:24)
-- `contains` — 22 incoming relationships (internal/orchestrator/orchestrator_test.go:44)
-- `RuntimeDir` — 21 incoming relationships (internal/workspace/workspace.go:116)
+- `Open` — 25 incoming relationships (internal/workspace/workspace.go:24)
+- `SetValue` — 22 incoming relationships (internal/tui/input/input.go:138)
+- `RuntimeDir` — 22 incoming relationships (internal/workspace/workspace.go:116)
+- `Height` — 19 incoming relationships (internal/tui/input/input.go:126)
+- `SaveFeature` — 19 incoming relationships (internal/workspace/workspace.go:62)
 - `printExecLog` — 19 incoming relationships (internal/cli/cli.go:1255)
-- `SaveFeature` — 18 incoming relationships (internal/workspace/workspace.go:62)
-- `Truncate` — 16 incoming relationships (internal/tui/util/text.go:11)
-- `assertFramework` — 15 incoming relationships (internal/project/project_test.go:381)
-- `Parse` — 15 incoming relationships (internal/tui/input/input.go:168)
+- `newTestModel` — 19 incoming relationships (internal/tui/workbench_test.go:19)
 
 ## Detected Conventions
 
 - **Go formatting and tests:** Go source is present; use gofmt and keep tests in *_test.go files beside the package.
 - **Test organization:** 13 test files use language-native test naming.
-- **Internal package boundary:** 48 files live under internal/; keep non-public implementation there.
+- **Internal package boundary:** 49 files live under internal/; keep non-public implementation there.
 
 Full machine-readable graph: `.thanos/codebase/graph.json`.
