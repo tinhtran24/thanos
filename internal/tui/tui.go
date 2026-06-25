@@ -1,7 +1,8 @@
 // Package tui is the interactive Thanos workbench. It composes crush-style
 // component packages (chat, sidebar, dialog, input, attachments) into a
-// chat-first layout: a role-attributed agent chat log on the left, and a right
-// sidebar with the logo, the Feature→EC tree, and model/MCP info. The
+// chat-first layout: a role-attributed agent chat log on the left and, on wide
+// terminals, a right sidebar with the logo, Feature→EC tree, and model/MCP
+// info. Compact terminals collapse the sidebar into a one-line header. The
 // orchestrator/state logic is unchanged.
 package tui
 
@@ -80,6 +81,7 @@ type modelUI struct {
 	// overlays / modes
 	picker     *dialog.FeaturePicker
 	clarify    *dialog.Clarify
+	confirm    *dialog.Confirm
 	showHelp   bool
 	focus      focusMode
 	selectMode bool
@@ -89,9 +91,10 @@ type modelUI struct {
 	centerHeaderLines            int
 	dragging                     bool
 
-	// inputY0 is the screen row of the command-box input line, used to place the
-	// real terminal cursor (see View).
-	inputY0 int
+	// inputY0 is the first rendered textarea row. Attachment and completion rows
+	// are above it; View adds the textarea-relative cursor row exactly once.
+	inputY0      int
+	inputYOffset int
 
 	// Right-sidebar tree geometry for mouse hit-testing.
 	treeRows            []sidebar.Row
@@ -301,16 +304,25 @@ func (m *modelUI) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.reload()
 	case tea.PasteMsg:
-		// Bracketed paste of a filesystem path stages an attachment on the
-		// selected feature.
-		if m.focus == focusInput {
-			pasted := strings.TrimSpace(msg.Content)
-			if id := m.selectedFeatureID(); id != "" && looksLikePath(pasted) {
-				if att, err := attachments.SaveFile(m.ws, id, pasted); err == nil {
-					m.attach.Add(att)
-					return m, nil
+		// Only the focused composer owns bracketed paste. A complete supported
+		// file path is staged; every other paste is ordinary editable text.
+		if m.focus == focusInput && !m.modalActive() {
+			if id := m.selectedFeatureID(); id != "" {
+				if path, ok := attachmentCandidate(msg.Content); ok {
+					if att, err := attachments.SaveFile(m.ws, id, path); err == nil {
+						m.err = nil
+						m.attach.Add(att)
+						return m, nil
+					}
 				}
 			}
+			cmd := m.input.Update(msg)
+			if err := m.input.Err(); err != nil {
+				m.err = err
+			} else {
+				m.err = nil
+			}
+			return m, cmd
 		}
 		return m, nil
 	case tea.KeyPressMsg:
@@ -361,6 +373,13 @@ func (m *modelUI) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.showHelp {
 		if key == "esc" || key == "?" || key == "q" {
 			m.showHelp = false
+		}
+		return m, nil
+	}
+	if m.confirm != nil {
+		m.confirm.Update(msg)
+		if m.confirm.Done() {
+			m.confirm = nil
 		}
 		return m, nil
 	}
@@ -630,8 +649,6 @@ func (m *modelUI) submitCommand() (tea.Model, tea.Cmd) {
 			return m, m.createFeature(arg)
 		}
 		return m.startSelected()
-	case "/continue":
-		return m.startContinueSelected()
 	case "/new":
 		return m.startCreate(false, "", arg)
 	case "/runner":
@@ -720,7 +737,7 @@ func (m *modelUI) runCLIForSelected(label, sub, arg, usage string) (tea.Model, t
 // handleMousePress handles a left-click: select a session row in the left pane,
 // or begin a chat-bubble selection in the center pane.
 func (m *modelUI) handleMousePress(mm tea.Mouse) tea.Cmd {
-	if m.picker != nil || m.showHelp || m.clarify != nil || mm.Button != tea.MouseLeft {
+	if m.picker != nil || m.showHelp || m.clarify != nil || m.confirm != nil || mm.Button != tea.MouseLeft {
 		return nil
 	}
 
@@ -829,17 +846,9 @@ func (m *modelUI) startSelected() (tea.Model, tea.Cmd) {
 	return m.startAgent(feature, "run")
 }
 
-func (m *modelUI) startContinueSelected() (tea.Model, tea.Cmd) {
-	feature, ok := m.selected()
-	if !ok {
-		return m, nil
-	}
-	return m.startAgent(feature, "continue")
-}
-
 // startAgent runs `thanos <sub> <feature>` as a subprocess and streams its
 // output into the chat, tailing the feature's events.jsonl so each phase role
-// appears as its own bubble (identical for run and continue).
+// appears as its own bubble.
 func (m *modelUI) startAgent(feature model.Feature, sub string) (tea.Model, tea.Cmd) {
 	if m.running {
 		m.err = errors.New("a task is already running")
@@ -907,6 +916,10 @@ func (m *modelUI) selectedFeatureID() string {
 		return f.ID
 	}
 	return ""
+}
+
+func (m *modelUI) modalActive() bool {
+	return m.showHelp || m.picker != nil || m.confirm != nil || m.clarify != nil
 }
 
 // collectRefs extracts @path tokens that resolve to existing workspace files and
@@ -1209,11 +1222,14 @@ func (m *modelUI) markDone() error {
 		return errors.New("no session selected")
 	}
 	snapshot := m.states[feature.ID]
-	if !snapshot.ok || snapshot.state.Phase != model.PhasePending {
-		return fmt.Errorf("%s is not pending human review", feature.ID)
+	if !snapshot.ok {
+		return fmt.Errorf("%s has no workflow state", feature.ID)
 	}
 	current := snapshot.state
-	current, err := state.Transition(current, model.PhaseDone)
+	if err := m.ws.ValidateCompletionEvidence(feature, current); err != nil {
+		return err
+	}
+	current, err := state.Complete(current)
 	if err != nil {
 		return err
 	}
@@ -1236,17 +1252,24 @@ func sortedRunnerNames(runners map[string]model.Runner) []string {
 	return names
 }
 
-func looksLikePath(value string) bool {
+func attachmentCandidate(value string) (string, bool) {
 	value = strings.TrimSpace(value)
-	if value == "" || strings.ContainsAny(value, "\n") {
-		return false
+	if value == "" || strings.ContainsAny(value, "\r\n") {
+		return "", false
 	}
-	if strings.HasPrefix(value, "/") || strings.HasPrefix(value, "~/") || strings.HasPrefix(value, "./") {
-		if _, err := os.Stat(expandHome(value)); err == nil {
-			return true
-		}
+	if strings.HasPrefix(value, `"`) || strings.HasPrefix(value, "'") ||
+		strings.HasSuffix(value, `"`) || strings.HasSuffix(value, "'") {
+		return "", false
 	}
-	return false
+	if !strings.HasPrefix(value, "/") && !strings.HasPrefix(value, "~/") && !strings.HasPrefix(value, "./") {
+		return "", false
+	}
+	path := expandHome(value)
+	info, err := os.Stat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return "", false
+	}
+	return path, true
 }
 
 func expandHome(value string) string {

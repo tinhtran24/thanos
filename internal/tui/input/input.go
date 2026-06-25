@@ -5,9 +5,11 @@
 package input
 
 import (
+	"errors"
 	"strings"
+	"unicode"
 
-	"charm.land/bubbles/v2/textinput"
+	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/tinhtran/thanos/internal/tui/styles"
@@ -24,7 +26,6 @@ type Command struct {
 var Commands = []Command{
 	// Session lifecycle
 	{"/run", "run the selected session through its next phase"},
-	{"/continue", "resume the selected session from its failed round"},
 	{"/new", "create a new session: /new <title>"},
 	{"/bugfix", "open a bugfix of the selected session: /bugfix <title>"},
 	{"/runner", "switch model runner: /runner [name]"},
@@ -51,12 +52,15 @@ var Commands = []Command{
 	{"/quit", "quit Thanos"},
 }
 
-// Model wraps a textinput plus completion state.
+const maxContentHeight = 10000
+
+// Model wraps a textarea plus completion state.
 type Model struct {
-	ti         textinput.Model
+	ti         textarea.Model
 	width      int
 	focused    bool
 	noComplete bool // when true (form mode), suppress slash-command completions
+	err        error
 }
 
 // SetCommandMode toggles slash-command completions. Disable it while collecting
@@ -68,17 +72,27 @@ const DefaultPlaceholder = "type a / command (enter runs the selected session)"
 
 // New returns a blurred command box.
 func New() Model {
-	ti := textinput.New()
+	ti := textarea.New()
 	ti.Prompt = "❯ "
 	ti.Placeholder = DefaultPlaceholder
+	ti.ShowLineNumbers = false
+	ti.CharLimit = 0
+	ti.DynamicHeight = true
+	ti.MinHeight = 1
+	ti.MaxHeight = 6
+	ti.MaxContentHeight = maxContentHeight
 	// Use the real terminal cursor (crush's pattern): the parent surfaces it via
 	// the View.Cursor field, offset to the input's on-screen position.
 	ti.SetVirtualCursor(false)
+	ti.SetHeight(1)
 	return Model{ti: ti}
 }
 
 // SetPrompt changes the leading prompt string.
-func (m *Model) SetPrompt(p string) { m.ti.Prompt = p }
+func (m *Model) SetPrompt(p string) {
+	m.ti.Prompt = p
+	m.ti.SetWidth(max(4, m.width-4))
+}
 
 // SetPlaceholder changes the placeholder text shown when empty.
 func (m *Model) SetPlaceholder(s string) { m.ti.Placeholder = s }
@@ -100,23 +114,117 @@ func (m *Model) Focused() bool { return m.focused }
 // SetWidth sizes the box.
 func (m *Model) SetWidth(w int) { m.width = w; m.ti.SetWidth(max(4, w-4)) }
 
+// SetMaxHeight caps the visible composer viewport. Content has a separate
+// 10,000-visual-row limit and scrolls when it exceeds this viewport.
+func (m *Model) SetMaxHeight(h int) {
+	m.ti.MaxHeight = max(1, h)
+	m.ti.SetHeight(m.ti.Height())
+}
+
+// Height returns the textarea's current visible height.
+func (m *Model) Height() int { return m.ti.Height() }
+
 // Value returns the current text.
 func (m *Model) Value() string { return m.ti.Value() }
 
 // Reset clears the box.
-func (m *Model) Reset() { m.ti.SetValue("") }
+func (m *Model) Reset() {
+	m.err = nil
+	m.ti.SetValue("")
+}
 
 // SetValue replaces the text and moves the cursor to the end.
 func (m *Model) SetValue(v string) {
-	m.ti.SetValue(v)
+	m.err = nil
+	m.setValue(normalizeLineEndings(v))
 	m.ti.CursorEnd()
 }
 
-// Update forwards key/edit messages to the textinput.
+// Err returns the most recent input validation error.
+func (m *Model) Err() error { return m.err }
+
+// Update forwards key/edit messages to the textarea.
 func (m *Model) Update(msg tea.Msg) tea.Cmd {
+	m.err = nil
+	if pasted, ok := msg.(tea.PasteMsg); ok {
+		pasted.Content = sanitizeTextareaInput(normalizeLineEndings(pasted.Content))
+		if !m.pasteFits(pasted.Content) {
+			m.err = errors.New("paste exceeds the 10,000-row composer limit")
+			return nil
+		}
+		// Bubbles v2.1.0 reserves the textarea's initial row when bulk
+		// inserting, so a configured limit of N accepts at most N-1 rows.
+		// Raise the insertion budget for this already-preflighted paste only,
+		// then restore the real 10,000-row editing ceiling immediately.
+		m.ti.MaxContentHeight = maxContentHeight + 1
+		m.ti, _ = m.ti.Update(pasted)
+		m.ti.MaxContentHeight = maxContentHeight
+		return nil
+	}
 	var cmd tea.Cmd
 	m.ti, cmd = m.ti.Update(msg)
 	return cmd
+}
+
+// pasteFits uses an equivalently configured textarea as an exact preflight.
+// The probe receives the value that would result from insertion at the current
+// logical cursor, so the real textarea is never partially mutated.
+func (m *Model) pasteFits(pasted string) bool {
+	value := m.ti.Value()
+	lines := strings.Split(value, "\n")
+	row := min(m.ti.Line(), len(lines)-1)
+	col := m.ti.Column()
+	line := []rune(lines[row])
+	col = min(col, len(line))
+	lines[row] = string(line[:col]) + pasted + string(line[col:])
+	candidate := strings.Join(lines, "\n")
+
+	probe := textarea.New()
+	probe.Prompt = m.ti.Prompt
+	probe.ShowLineNumbers = false
+	probe.CharLimit = 0
+	probe.DynamicHeight = true
+	probe.MinHeight = 1
+	probe.MaxHeight = max(1, m.ti.MaxHeight)
+	probe.MaxContentHeight = maxContentHeight + 1
+	probe.SetWidth(max(4, m.width-4))
+	probe.SetValue(candidate)
+	return probe.Value() == candidate
+}
+
+func (m *Model) setValue(value string) {
+	// Match paste semantics at the exact boundary despite the Bubbles bulk
+	// insertion off-by-one, while leaving ordinary keyboard editing configured
+	// with the required 10,000-row limit.
+	m.ti.MaxContentHeight = maxContentHeight + 1
+	m.ti.SetValue(value)
+	m.ti.MaxContentHeight = maxContentHeight
+}
+
+func normalizeLineEndings(value string) string {
+	value = strings.ReplaceAll(value, "\r\n", "\n")
+	return strings.ReplaceAll(value, "\r", "\n")
+}
+
+// sanitizeTextareaInput mirrors the textarea widget's clipboard sanitizer so
+// the atomic content-limit preflight compares the value the widget will retain.
+func sanitizeTextareaInput(value string) string {
+	var b strings.Builder
+	for _, r := range value {
+		switch {
+		case r == unicode.ReplacementChar:
+			continue
+		case r == '\n':
+			b.WriteRune(r)
+		case r == '\t':
+			b.WriteString("    ")
+		case unicode.IsControl(r):
+			continue
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 // matches returns commands whose name has the current token as a prefix.
@@ -125,7 +233,7 @@ func (m *Model) matches() []Command {
 		return nil
 	}
 	val := strings.TrimSpace(m.ti.Value())
-	if !strings.HasPrefix(val, "/") || strings.Contains(val, " ") {
+	if !strings.HasPrefix(val, "/") || strings.IndexFunc(val, unicode.IsSpace) >= 0 {
 		return nil
 	}
 	var out []Command
@@ -173,12 +281,12 @@ func Parse(value string) (cmd string, arg string) {
 	if !strings.HasPrefix(value, "/") {
 		return "/run", value
 	}
-	parts := strings.SplitN(value, " ", 2)
-	cmd = parts[0]
-	if len(parts) == 2 {
-		arg = strings.TrimSpace(parts[1])
+	if index := strings.IndexFunc(value, unicode.IsSpace); index >= 0 {
+		cmd = value[:index]
+		arg = strings.TrimSpace(value[index:])
+		return cmd, arg
 	}
-	return cmd, arg
+	return value, ""
 }
 
 func max(a, b int) int {

@@ -22,7 +22,7 @@ var roleStyles = map[model.Role]RoleStyle{
 	model.RoleReviewer:       {Warning, "◈", "reviewer"},
 	model.RoleTester:         {Info, "✓", "tester"},
 	model.RoleDeepReviewer:   {Accent, "❖", "deep-reviewer"},
-	model.RoleAcceptor:       {Success, "★", "acceptor"},
+	model.RoleAcceptor:       {Success, "★", "overview"},
 	model.RoleMiniCoder:      {Success, "▹", "mini-coder"},
 	model.RoleReVerifier:     {Warning, "↻", "re-verifier"},
 	model.RoleSynthesizer:    {Muted, "⊕", "synthesizer"},
@@ -55,11 +55,13 @@ func PhaseLabel(phase model.Phase) string {
 	case model.PhaseReview:
 		return "review"
 	case model.PhaseTest:
-		return "test"
+		return "EC tests"
 	case model.PhaseDeepReview:
 		return "deep review"
 	case model.PhaseAmend:
 		return "amend"
+	case model.PhaseOverview:
+		return "overview"
 	case model.PhaseAccept:
 		return "accept"
 	case model.PhasePending:

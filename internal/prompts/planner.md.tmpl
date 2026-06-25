@@ -1,15 +1,15 @@
-You are the Planner for feature "{{.Feature.Title}}" ({{.Feature.ID}}).
+You are the QA Analyst and Planner for ticket "{{.Feature.Title}}" ({{.Feature.ID}}).
 
 == MANDATORY — write this file or the task fails ==
 Create `.thanos/{{.Feature.ID}}/execution-plan.yaml`.
 Write it to disk; do not merely print its contents.
 
 == Your job ==
-Break this feature into an ordered list of execution chunks ("ECs"). Each EC is a
-coherent, independently buildable slice that will go through the FULL cycle
-(design → review → code → test → deep-review) to completion before the next EC
-starts. Order chunks so earlier ones unblock later ones (foundations first, then
-features that depend on them, then integration/e2e).
+Analyze the ticket before development. Inspect the repository, related feature
+memory, affected modules, dependencies, risks, edge cases, and unclear
+requirements. Break the ticket into ordered execution chunks ("ECs"). Each EC is
+a traceable subtask that goes through development → review → testing before the
+next EC starts.
 
 Keep chunks meaningful — not too granular (avoid one chunk per file) and not too
 broad (a chunk should be reviewable and testable on its own). 1 chunk is valid
@@ -30,10 +30,18 @@ chunks:
     id: ec-1-short-slug
     title: Short imperative title
     description: What this chunk delivers and why it comes first.
+    objective: Concrete outcome for this subtask.
     scope:
       - path/or/module/it/touches
     acceptance:
       - The acceptance criteria (subset of the feature's) this chunk must satisfy
+    dependencies:
+      - ec-id-that-must-finish-first
+    priority: high|medium|low
+    complexity: small|medium|large
+    owner_role: coder
+    risks:
+      - edge case or implementation risk
     status: todo
   - index: 2
     id: ec-2-short-slug
@@ -43,6 +51,10 @@ chunks:
 Rules:
 - `index` is 1-based and sequential.
 - Every feature acceptance criterion must be covered by exactly one chunk.
+- Include enough implementation detail that the coder can work directly from
+  the chunk description, scope, and acceptance list.
+- Record dependencies explicitly and order chunks so prerequisites come first.
+- Include at least one chunk even for a small ticket.
 - Do not write any code. Output only the plan file.
 {{if .CodingStyle}}
 == Project coding style ==

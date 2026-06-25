@@ -86,29 +86,15 @@ func (o *Orchestrator) Run(ctx context.Context, featureID, runnerOverride string
 			if err == nil {
 				current, err = o.beginExecutionPlan(feature, current)
 			}
-		case model.PhaseDesign:
+		case model.PhaseDesign, model.PhaseDesignReview:
+			current, err = o.transition(current, model.PhaseCode)
+		case model.PhaseDeepReview:
+			current, err = o.transition(current, model.PhaseOverview)
+		case model.PhaseCode, model.PhaseAmend:
 			o.ensureChunkDir(feature.ID, current)
 			err = o.executeRole(ctx, feature, config, current, runnerConfig, ec)
 			if err == nil {
-				err = requireArtifacts(o.Workspace, feature.ID, ecJoin(current, "task-brief.md"), ecJoin(current, "acceptance-criteria.md"), ecJoin(current, "test-strategy.yaml"))
-			}
-			if err == nil {
-				current, err = o.transition(current, model.PhaseDesignReview)
-			}
-		case model.PhaseDesignReview:
-			err = o.executeRole(ctx, feature, config, current, runnerConfig, ec)
-			if err == nil {
-				if verdictPass(o.Workspace, feature.ID, ecJoin(current, "design-review-report.md")) {
-					current, err = o.transition(current, model.PhaseCode)
-				} else {
-					current, err = o.transition(current, model.PhaseDesign)
-				}
-			}
-		case model.PhaseCode, model.PhaseAmend:
-			o.ensureRoundDir(feature.ID, current)
-			err = o.executeRole(ctx, feature, config, current, runnerConfig, ec)
-			if err == nil {
-				report := ecJoin(current, "rounds", fmt.Sprintf("round-%d", current.Round), "coder-report.md")
+				report := ecJoin(current, "implementation-note.md")
 				err = requireArtifacts(o.Workspace, feature.ID, report)
 			}
 			if err == nil {
@@ -120,34 +106,32 @@ func (o *Orchestrator) Run(ctx context.Context, featureID, runnerOverride string
 		case model.PhaseReview:
 			err = o.executeRole(ctx, feature, config, current, runnerConfig, ec)
 			if err == nil {
-				report := ecJoin(current, "rounds", fmt.Sprintf("round-%d", current.Round), "review-report.md")
-				if verdictPass(o.Workspace, feature.ID, report) {
+				report := ecJoin(current, "review-report.md")
+				err = requireArtifacts(o.Workspace, feature.ID, report)
+				if err == nil && reviewApproved(o.Workspace, feature.ID, report) {
 					current, err = o.transition(current, model.PhaseTest)
-				} else {
-					current, err = o.transition(current, model.PhaseAmend)
+				} else if err == nil {
+					current, err = o.transition(current, model.PhaseCode)
+					if err == nil {
+						return nil
+					}
 				}
 			}
 		case model.PhaseTest:
 			err = o.executeRole(ctx, feature, config, current, runnerConfig, ec)
 			if err == nil {
-				report := ecJoin(current, "rounds", fmt.Sprintf("round-%d", current.Round), "test-report.md")
-				if verdictPass(o.Workspace, feature.ID, report) {
-					current, err = o.transition(current, model.PhaseDeepReview)
-				} else {
-					current, err = o.transition(current, model.PhaseAmend)
-				}
-			}
-		case model.PhaseDeepReview:
-			err = o.executeRole(ctx, feature, config, current, runnerConfig, ec)
-			if err == nil {
-				report := ecJoin(current, "rounds", fmt.Sprintf("round-%d", current.Round), "deep-review-report.md")
-				if verdictPass(o.Workspace, feature.ID, report) {
+				report := ecJoin(current, "test-report.md")
+				err = requireArtifacts(o.Workspace, feature.ID, report)
+				if err == nil && verdictPass(o.Workspace, feature.ID, report) {
 					current, err = o.finishChunkOrFeature(feature, current)
-				} else {
-					current, err = o.transition(current, model.PhaseAmend)
+				} else if err == nil {
+					current, err = o.transition(current, model.PhaseCode)
+					if err == nil {
+						return nil
+					}
 				}
 			}
-		case model.PhaseAccept:
+		case model.PhaseOverview, model.PhaseAccept:
 			err = o.executeRole(ctx, feature, config, current, runnerConfig, ec)
 			if err == nil {
 				err = requireArtifacts(o.Workspace, feature.ID, "final-report.md", "retro-learnings.json", "feature-memory.json")
@@ -163,9 +147,9 @@ func (o *Orchestrator) Run(ctx context.Context, featureID, runnerOverride string
 				}
 			}
 			if err == nil {
-				current, err = o.transition(current, model.PhasePending)
+				current, err = o.transition(current, model.PhaseDone)
 				if err == nil {
-					feature.Status = "pending-review"
+					feature.Status = "done"
 					err = o.Workspace.SaveFeature(feature)
 					if err == nil {
 						err = featuregraph.Sync(o.Workspace.DotDir(), feature)
@@ -197,7 +181,7 @@ func (o *Orchestrator) Run(ctx context.Context, featureID, runnerOverride string
 				_ = o.Workspace.WriteState(current)
 				_ = o.Workspace.AppendEvent(model.Event{
 					Type: "clarify", FeatureID: feature.ID, Timestamp: time.Now().UTC(),
-					Phase: current.Phase, Role: current.Role, Round: current.Round,
+					Phase: current.Phase, Role: current.Role,
 				})
 				ui.Block(o.Stdout, ui.ExecLog(ui.ExecLogEntry{
 					Type: "read", Path: filepath.Join(o.Workspace.DotDir(), feature.ID, ecJoin(current, "clarify.json")),
@@ -226,25 +210,27 @@ type ecContext struct {
 func (o *Orchestrator) executeRole(ctx context.Context, feature model.Feature, config model.Config, current model.State, runnerConfig model.Runner, ec ecContext) error {
 	prompt, err := prompts.Render(current.Role, prompts.Data{
 		Feature: feature, Config: config, State: current, Root: o.Workspace.Root,
-		ExecutionChunk: ec.chunk, ECPrefix: ec.prefix, CodingStyle: ec.coding, Plan: ec.plan,
+		ExecutionChunk: ec.chunk, ECPrefix: ec.prefix, ECName: workItemName(feature, current, ec.chunk),
+		CodingStyle: ec.coding, Plan: ec.plan,
 	})
 	if err != nil {
 		return err
 	}
-	promptPath := filepath.Join(o.Workspace.DotDir(), "prompts", fmt.Sprintf("%s-ec%d-%s-round-%d.md", feature.ID, current.ECIndex, current.Role, current.Round))
+	promptPath := filepath.Join(o.Workspace.DotDir(), "prompts", fmt.Sprintf("%s-ec%d-%s.md", feature.ID, current.ECIndex, current.Role))
+	if err := os.MkdirAll(filepath.Dir(promptPath), 0o755); err != nil {
+		return err
+	}
 	if err := os.WriteFile(promptPath, []byte(prompt), 0o644); err != nil {
 		return err
 	}
 	_ = o.Workspace.AppendEvent(model.Event{
 		Type: "role-start", FeatureID: feature.ID, Timestamp: time.Now().UTC(),
-		Phase: current.Phase, Role: current.Role, Round: current.Round,
+		Phase: current.Phase, Role: current.Role,
+		Data: map[string]any{"work_item": workItemName(feature, current, ec.chunk)},
 	})
 	command := strings.TrimSpace(runnerConfig.Command + " " + strings.Join(runnerConfig.Args, " "))
 	started := time.Now()
-	label := fmt.Sprintf("%s %s (round %d) running", feature.ID, current.Role, current.Round)
-	if ec.chunk != nil && current.ECTotal > 1 {
-		label = fmt.Sprintf("%s EC-%d/%d %s (round %d) running", feature.ID, current.ECIndex, current.ECTotal, current.Role, current.Round)
-	}
+	label := fmt.Sprintf("%s %s running", workItemName(feature, current, ec.chunk), current.Role)
 	ui.Block(o.Stdout, ui.ExecLog(ui.ExecLogEntry{
 		Type: "exec", Command: command, Workdir: o.Workspace.Root, Status: ui.Running,
 		Message: label,
@@ -265,7 +251,7 @@ func (o *Orchestrator) executeRole(ctx context.Context, feature model.Feature, c
 	}
 	_ = o.Workspace.AppendEvent(model.Event{
 		Type: "role-end", FeatureID: feature.ID, Timestamp: time.Now().UTC(),
-		Phase: current.Phase, Role: current.Role, Round: current.Round, Data: data,
+		Phase: current.Phase, Role: current.Role, Data: data,
 	})
 	if err == nil && o.clarifyPending(feature.ID, current) {
 		return errClarifyPending
@@ -303,7 +289,7 @@ func (o *Orchestrator) transition(current model.State, to model.Phase) (model.St
 	}
 	_ = o.Workspace.AppendEvent(model.Event{
 		Type: "transition", FeatureID: current.FeatureID, Timestamp: time.Now().UTC(),
-		Phase: next.Phase, Role: next.Role, Round: next.Round,
+		Phase: next.Phase, Role: next.Role,
 		Data: map[string]any{"from": current.Phase, "to": next.Phase},
 	})
 	return next, nil
@@ -353,14 +339,29 @@ func currentChunk(chunks []model.ExecutionChunk, idx int) *model.ExecutionChunk 
 	return nil
 }
 
+func workItemName(feature model.Feature, current model.State, chunk *model.ExecutionChunk) string {
+	sequence := strings.TrimPrefix(strings.SplitN(feature.ID, "-", 2)[0], "F")
+	if sequence == "" {
+		sequence = feature.ID
+	}
+	index := current.ECIndex
+	if index < 1 && chunk != nil {
+		index = chunk.Index
+	}
+	if index < 1 {
+		index = 1
+	}
+	title := feature.Title
+	if chunk != nil && strings.TrimSpace(chunk.Title) != "" {
+		title = chunk.Title
+	}
+	return fmt.Sprintf("Feature %s-EC%d %s", sequence, index, title)
+}
+
 func (o *Orchestrator) ensureChunkDir(id string, s model.State) {
 	if d := ecDir(s); d != "" {
 		_ = o.Workspace.EnsureArtifactDir(id, d)
 	}
-}
-
-func (o *Orchestrator) ensureRoundDir(id string, s model.State) {
-	_ = o.Workspace.EnsureArtifactDir(id, ecJoin(s, "rounds", fmt.Sprintf("round-%d", s.Round)))
 }
 
 func (o *Orchestrator) readCodingStyle() string {
@@ -389,7 +390,7 @@ func (o *Orchestrator) markChunkStatus(id, chunkID, status string) {
 }
 
 // beginExecutionPlan loads the planner's chunks (synthesizing a single implicit
-// chunk if none were written) and starts the first chunk's design phase.
+// chunk if none were written) and starts coding the first chunk.
 func (o *Orchestrator) beginExecutionPlan(feature model.Feature, current model.State) (model.State, error) {
 	plan, err := o.Workspace.ReadPlan(feature.ID)
 	if err != nil {
@@ -407,6 +408,9 @@ func (o *Orchestrator) beginExecutionPlan(feature model.Feature, current model.S
 			return current, err
 		}
 	}
+	if err := validateExecutionPlan(feature, active); err != nil {
+		return current, err
+	}
 	current.ECTotal = len(active)
 	current.ECIndex = 1
 	current.ECID = active[0].ID
@@ -415,11 +419,45 @@ func (o *Orchestrator) beginExecutionPlan(feature model.Feature, current model.S
 		Type: "ec-start", FeatureID: feature.ID, Timestamp: time.Now().UTC(),
 		Data: map[string]any{"ec_index": 1, "ec_total": current.ECTotal, "ec_id": current.ECID, "title": active[0].Title},
 	})
-	return o.transition(current, model.PhaseDesign)
+	return o.transition(current, model.PhaseCode)
+}
+
+func validateExecutionPlan(feature model.Feature, chunks []model.ExecutionChunk) error {
+	seen := make(map[string]int, len(chunks))
+	acceptanceCoverage := make(map[string]int, len(feature.Acceptance))
+	for index, chunk := range chunks {
+		wantIndex := index + 1
+		if chunk.Index != wantIndex {
+			return fmt.Errorf("execution plan chunk %q has index %d, want %d", chunk.ID, chunk.Index, wantIndex)
+		}
+		if strings.TrimSpace(chunk.ID) == "" {
+			return fmt.Errorf("execution plan chunk %d has no ID", chunk.Index)
+		}
+		if _, exists := seen[chunk.ID]; exists {
+			return fmt.Errorf("execution plan contains duplicate chunk ID %q", chunk.ID)
+		}
+		for _, dependency := range chunk.Dependencies {
+			dependencyIndex, exists := seen[dependency]
+			if !exists || dependencyIndex >= index {
+				return fmt.Errorf("execution plan chunk %q depends on %q, which is not an earlier active chunk", chunk.ID, dependency)
+			}
+		}
+		seen[chunk.ID] = index
+		for _, criterion := range chunk.Acceptance {
+			acceptanceCoverage[strings.TrimSpace(criterion)]++
+		}
+	}
+	for _, criterion := range feature.Acceptance {
+		count := acceptanceCoverage[strings.TrimSpace(criterion)]
+		if count != 1 {
+			return fmt.Errorf("acceptance criterion %q is covered by %d execution chunks, want exactly 1", criterion, count)
+		}
+	}
+	return nil
 }
 
 // finishChunkOrFeature marks the current chunk done and either advances to the
-// next chunk's design phase or, for the last chunk, moves to feature accept.
+// next chunk's coding phase or, for the last chunk, creates the overview.
 func (o *Orchestrator) finishChunkOrFeature(feature model.Feature, current model.State) (model.State, error) {
 	o.markChunkStatus(feature.ID, current.ECID, "done")
 	_ = o.Workspace.AppendEvent(model.Event{
@@ -438,9 +476,9 @@ func (o *Orchestrator) finishChunkOrFeature(feature model.Feature, current model
 				Data: map[string]any{"ec_index": current.ECIndex, "ec_total": current.ECTotal, "ec_id": current.ECID, "title": active[current.ECIndex-1].Title},
 			})
 		}
-		return o.transition(current, model.PhaseDesign)
+		return o.transition(current, model.PhaseCode)
 	}
-	return o.transition(current, model.PhaseAccept)
+	return o.transition(current, model.PhaseOverview)
 }
 
 func requireArtifacts(ws *workspace.Workspace, id string, names ...string) error {
@@ -463,4 +501,15 @@ func verdictPass(ws *workspace.Workspace, id, name string) bool {
 		upper = upper[index:]
 	}
 	return strings.Contains(upper, "PASS") && !strings.Contains(upper, "FAIL")
+}
+
+func reviewApproved(ws *workspace.Workspace, id, name string) bool {
+	content, err := ws.ReadArtifact(id, name)
+	if err != nil {
+		return false
+	}
+	upper := strings.ToUpper(content)
+	return verdictPass(ws, id, name) &&
+		strings.Contains(upper, "APPROVED") &&
+		!strings.Contains(upper, "CHANGES REQUESTED")
 }

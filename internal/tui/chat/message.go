@@ -26,15 +26,15 @@ const (
 
 // Message is one bubble in the chat log.
 type Message struct {
-	ID    int
-	Kind  Kind
-	Role  model.Role
-	Label string // overrides the role label (used for CLI command bubbles)
-	Phase model.Phase
-	Round int
-	Body  string
-	Done  bool
-	TS    time.Time
+	ID      int
+	Kind    Kind
+	Role    model.Role
+	Label   string // overrides the role label (used for CLI command bubbles)
+	Phase   model.Phase
+	Context string
+	Body    string
+	Done    bool
+	TS      time.Time
 }
 
 // plain returns the copy-friendly plaintext of a message (header + body).
@@ -45,8 +45,8 @@ func (m Message) plain() string {
 		if m.Label != "" {
 			head = m.Label
 		}
-		if m.Round > 0 {
-			head += " · round " + itoa(m.Round)
+		if m.Context != "" {
+			head += "  " + m.Context
 		}
 		return head + "\n" + strings.TrimRight(m.Body, "\n")
 	default:
@@ -75,8 +75,8 @@ func (m Message) render(width int, selected bool) string {
 	header := lipgloss.NewStyle().Foreground(color).Bold(true).
 		Render(avatar + " " + label)
 	meta := ""
-	if m.Round > 0 {
-		meta = styles.MutedS.Render("  round " + itoa(m.Round))
+	if m.Context != "" {
+		meta = styles.MutedS.Render("  " + m.Context)
 	}
 	if !m.Done && m.Body == "" {
 		meta += styles.MutedS.Render("  …")
@@ -110,20 +110,12 @@ func itoa(n int) string {
 	if n == 0 {
 		return "0"
 	}
-	neg := n < 0
-	if neg {
-		n = -n
-	}
 	var b [20]byte
 	i := len(b)
 	for n > 0 {
 		i--
 		b[i] = byte('0' + n%10)
 		n /= 10
-	}
-	if neg {
-		i--
-		b[i] = '-'
 	}
 	return string(b[i:])
 }

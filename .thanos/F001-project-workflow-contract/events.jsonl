@@ -1,0 +1,5 @@
+{"type":"transition","feature_id":"F001-project-workflow-contract","timestamp":"2026-06-25T02:17:25.247406Z","phase":"planning","role":"planner","data":{"from":"init","to":"planning"}}
+{"type":"role-start","feature_id":"F001-project-workflow-contract","timestamp":"2026-06-25T02:25:14.5977Z","phase":"reviewing","role":"reviewer","data":{"work_item":"Feature 001-EC1 Apply project workflow contract"}}
+{"type":"role-end","feature_id":"F001-project-workflow-contract","timestamp":"2026-06-25T02:25:22.811409Z","phase":"reviewing","role":"reviewer","data":{"error":"exit status 1","success":false}}
+{"type":"role-start","feature_id":"F001-project-workflow-contract","timestamp":"2026-06-25T02:26:35.645742Z","phase":"reviewing","role":"reviewer","data":{"work_item":"Feature 001-EC1 Apply project workflow contract"}}
+{"type":"role-end","feature_id":"F001-project-workflow-contract","timestamp":"2026-06-25T02:26:43.243968Z","phase":"reviewing","role":"reviewer","data":{"error":"exit status 1","success":false}}

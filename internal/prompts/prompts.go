@@ -39,6 +39,7 @@ type Data struct {
 	ExecutionChunk *model.ExecutionChunk
 	Plan           []model.ExecutionChunk
 	ECPrefix       string
+	ECName         string
 	CodingStyle    string
 }
 
@@ -65,9 +66,7 @@ func Render(role model.Role, data Data) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("load %s prompt: %w", role, err)
 	}
-	tmpl, err := template.New(name).Funcs(template.FuncMap{
-		"sub": func(a, b int) int { return a - b },
-	}).Parse(string(source))
+	tmpl, err := template.New(name).Parse(string(source))
 	if err != nil {
 		return "", err
 	}

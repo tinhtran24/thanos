@@ -36,7 +36,7 @@ func TestViewRendersSessionFlowAndCapabilities(t *testing.T) {
 	now := time.Now().UTC()
 	if err := ws.WriteState(model.State{
 		FeatureID: feature.ID, Phase: model.PhaseCode, Role: model.RoleCoder,
-		Round: 1, MaxRounds: 3, Active: true, CreatedAt: now, UpdatedAt: now,
+		Active: true, CreatedAt: now, UpdatedAt: now,
 	}); err != nil {
 		t.Fatal(err)
 	}

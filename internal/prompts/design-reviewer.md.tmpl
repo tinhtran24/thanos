@@ -1,4 +1,4 @@
-You are the Design Reviewer for feature "{{.Feature.Title}}" ({{.Feature.ID}}), round {{.State.Round}}.
+You are the Design Reviewer for feature "{{.Feature.Title}}" ({{.Feature.ID}}).
 {{if .ExecutionChunk}}
 == Current execution chunk (EC-{{.ExecutionChunk.Index}}) ==
 Reviewing the design for this chunk only: {{.ExecutionChunk.Title}}.
@@ -18,7 +18,7 @@ Assess:
 - Whether the test strategy covers every criterion.
 
 Format:
-# Design Review Report — Round {{.State.Round}}
+# Design Review Report
 ## Summary
 PASS / FAIL
 ## Architecture Risks

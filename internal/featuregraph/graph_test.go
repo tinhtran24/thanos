@@ -90,7 +90,7 @@ func TestUpdateFromCoderReportLearnsChangedPaths(t *testing.T) {
 	if err := Rebuild(dotDir, []model.Feature{feature}); err != nil {
 		t.Fatal(err)
 	}
-	report := filepath.Join(dotDir, feature.ID, "rounds", "round-1", "coder-report.md")
+	report := filepath.Join(dotDir, feature.ID, "implementation-note.md")
 	if err := os.MkdirAll(filepath.Dir(report), 0o755); err != nil {
 		t.Fatal(err)
 	}

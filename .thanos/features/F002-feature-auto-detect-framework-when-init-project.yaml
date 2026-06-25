@@ -1,8 +1,0 @@
-id: F002-feature-auto-detect-framework-when-init-project
-title: Feature Auto detect framework when init project
-description: when init project thanos should able know what framework using for language php, typescript, go, python,rust
-acceptance:
-    - PHP framework Wordpress, Laravel, Go framework Gin Echo, ...
-priority: medium
-status: todo
-runner: codex

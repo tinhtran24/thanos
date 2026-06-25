@@ -9,6 +9,7 @@ import (
 
 func TestAllTemplatesRender(t *testing.T) {
 	roles := []model.Role{
+		model.RolePlanner,
 		model.RoleDesigner,
 		model.RoleDesignReviewer,
 		model.RoleCoder,
@@ -27,7 +28,6 @@ func TestAllTemplatesRender(t *testing.T) {
 			Project: model.Project{Name: "test"},
 			Skills:  []model.Skill{{Name: "testing", Path: ".agents/skills/testing/SKILL.md"}},
 		},
-		State:         model.State{Round: 1},
 		Root:          "/tmp/test",
 		Iteration:     1,
 		ReviewerCount: 3,
@@ -58,7 +58,6 @@ func TestSkillRoleFiltering(t *testing.T) {
 			{Name: "coder-only", Path: "coder.md", Roles: []string{"coder"}},
 			{Name: "global", Path: "global.md"},
 		}},
-		State: model.State{Round: 1},
 	}
 	output, err := Render(model.RoleTester, data)
 	if err != nil {

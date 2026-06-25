@@ -62,8 +62,6 @@ func Execute(ctx context.Context, args []string, version string, stdout, stderr 
 		return runStatus(ws, stdout)
 	case "run":
 		return runFeature(ctx, ws, args[1:], stdout, stderr)
-	case "continue":
-		return runContinue(ctx, ws, args[1:], stdout, stderr)
 	case "prompt":
 		return runPrompt(ws, args[1:], stdout)
 	case "transition":
@@ -147,7 +145,6 @@ func runInit(_ context.Context, ws *workspace.Workspace, args []string, stdout i
 	config := model.Config{
 		Project:       detected,
 		DefaultRunner: *runnerName,
-		MaxRounds:     3,
 		Locale:        "en",
 		Runners: map[string]model.Runner{
 			*runnerName: {
@@ -332,19 +329,18 @@ func runStatus(ws *workspace.Workspace, stdout io.Writer) error {
 	}
 	rows := make([][]string, 0, len(features))
 	for _, feature := range features {
-		phase, round := "-", 0
+		phase := "-"
 		if current, err := ws.ReadState(feature.ID); err == nil {
-			phase, round = string(current.Phase), current.Round
+			phase = string(current.Phase)
 		}
 		rows = append(rows, []string{
 			feature.ID,
 			feature.Status,
 			phase,
-			strconv.Itoa(round),
 			feature.Title,
 		})
 	}
-	ui.Block(stdout, ui.Table([]string{"ID", "STATUS", "PHASE", "ROUND", "TITLE"}, rows))
+	ui.Block(stdout, ui.Table([]string{"ID", "STATUS", "PHASE", "TITLE"}, rows))
 	return nil
 }
 
@@ -366,104 +362,6 @@ func runFeature(ctx context.Context, ws *workspace.Workspace, args []string, std
 		Workspace: ws, Runner: runner.Subprocess{}, Stdout: stdout, Stderr: stderr,
 	}
 	return orch.Run(ctx, flags.Arg(0), *runnerName)
-}
-
-func runContinue(ctx context.Context, ws *workspace.Workspace, args []string, stdout, stderr io.Writer) error {
-	flags := flag.NewFlagSet("continue", flag.ContinueOnError)
-	flags.SetOutput(io.Discard)
-	runnerName := flags.String("runner", "", "runner override")
-	args, err := intersperseFlags(args, map[string]bool{"--runner": true})
-	if err != nil {
-		return err
-	}
-	if err := flags.Parse(args); err != nil {
-		return err
-	}
-	if flags.NArg() != 1 {
-		return errors.New("usage: thanos continue FEATURE_ID [--runner name]")
-	}
-	featureID, err := prepareContinue(ws, flags.Arg(0), stdout)
-	if err != nil {
-		return err
-	}
-	orch := orchestrator.Orchestrator{
-		Workspace: ws, Runner: runner.Subprocess{}, Stdout: stdout, Stderr: stderr,
-	}
-	return orch.Run(ctx, featureID, *runnerName)
-}
-
-func prepareContinue(ws *workspace.Workspace, featureID string, stdout io.Writer) (string, error) {
-	feature, err := ws.LoadFeature(featureID)
-	if err != nil {
-		return "", err
-	}
-	current, err := ws.ReadState(feature.ID)
-	if err != nil {
-		return "", err
-	}
-	failedRound, reportPath, err := latestFailedRound(ws, feature.ID, current)
-	if err != nil {
-		return "", err
-	}
-	current.Reason = ""
-	next, err := state.Transition(current, model.PhaseCode)
-	if err != nil {
-		return "", err
-	}
-	if err := ws.WriteState(next); err != nil {
-		return "", err
-	}
-	_ = ws.AppendEvent(model.Event{
-		Type:      "continue",
-		FeatureID: feature.ID,
-		Timestamp: time.Now().UTC(),
-		Phase:     next.Phase,
-		Role:      next.Role,
-		Round:     next.Round,
-		Data: map[string]any{
-			"from":          current.Phase,
-			"failed_report": reportPath,
-		},
-	})
-	printExecLog(stdout, ui.ExecLogEntry{
-		Type:    "read",
-		Path:    reportPath,
-		Message: fmt.Sprintf("Continuing failed round %d in coding round %d", failedRound, next.Round),
-		Status:  ui.Completed,
-	})
-	return feature.ID, nil
-}
-
-func latestFailedRound(ws *workspace.Workspace, featureID string, current model.State) (int, string, error) {
-	ecDir := ""
-	if current.ECTotal > 1 && current.ECIndex >= 1 {
-		ecDir = fmt.Sprintf("ec-%d", current.ECIndex)
-	}
-	reportNames := []string{"deep-review-report.md", "test-report.md", "review-report.md"}
-	for round := current.Round; round >= 1; round-- {
-		for _, reportName := range reportNames {
-			relative := filepath.Join(ecDir, "rounds", fmt.Sprintf("round-%d", round), reportName)
-			content, err := ws.ReadArtifact(featureID, relative)
-			if err != nil {
-				if errors.Is(err, os.ErrNotExist) {
-					continue
-				}
-				return 0, "", err
-			}
-			if reportVerdictFailed(content) {
-				return round, filepath.Join(ws.RuntimeDir(featureID), relative), nil
-			}
-		}
-	}
-	return 0, "", fmt.Errorf("%s has no failed round report to continue", featureID)
-}
-
-func reportVerdictFailed(content string) bool {
-	verdict := strings.ToUpper(content)
-	if index := strings.LastIndex(verdict, "VERDICT"); index >= 0 {
-		verdict = verdict[index:]
-	}
-	return strings.Contains(verdict, "FAIL")
 }
 
 func runPrompt(ws *workspace.Workspace, args []string, stdout io.Writer) error {
@@ -533,14 +431,18 @@ func runDone(ws *workspace.Workspace, args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	current, err := ws.ReadState(feature.ID)
+	config, err := ws.ReadConfig()
 	if err != nil {
 		return err
 	}
-	if current.Phase != model.PhasePending {
-		return fmt.Errorf("%s is %s, not pending-review", feature.ID, current.Phase)
+	current, err := ws.EnsureRuntime(feature, config)
+	if err != nil {
+		return err
 	}
-	next, err := state.Transition(current, model.PhaseDone)
+	if err := ws.ValidateCompletionEvidence(feature, current); err != nil {
+		return err
+	}
+	next, err := state.Complete(current)
 	if err != nil {
 		return err
 	}
@@ -1261,6 +1163,7 @@ func parseSkillRoles(value string) ([]string, error) {
 		return nil, nil
 	}
 	valid := map[string]bool{
+		string(model.RolePlanner):        true,
 		string(model.RoleDesigner):       true,
 		string(model.RoleDesignReviewer): true,
 		string(model.RoleCoder):          true,
@@ -1290,6 +1193,8 @@ func parseSkillRoles(value string) ([]string, error) {
 
 func phaseForRole(role model.Role) model.Phase {
 	switch role {
+	case model.RolePlanner:
+		return model.PhasePlan
 	case model.RoleDesigner:
 		return model.PhaseDesign
 	case model.RoleDesignReviewer:
@@ -1303,7 +1208,7 @@ func phaseForRole(role model.Role) model.Phase {
 	case model.RoleDeepReviewer:
 		return model.PhaseDeepReview
 	case model.RoleAcceptor:
-		return model.PhaseAccept
+		return model.PhaseOverview
 	default:
 		return ""
 	}
@@ -1419,9 +1324,8 @@ Usage:
   thanos new "Feature title" [--description TEXT] [--acceptance "A; B"]
   thanos bugfix FEATURE_ID "Bugfix title" [--description TEXT] [--rules "A; B"]
   thanos run FEATURE_ID [--runner NAME]
-  thanos continue FEATURE_ID [--runner NAME]
   thanos status
-  thanos prompt FEATURE_ID designer|coder|reviewer|tester
+  thanos prompt FEATURE_ID planner|coder|reviewer|tester
   thanos transition FEATURE_ID PHASE
   thanos done FEATURE_ID
   thanos doctor

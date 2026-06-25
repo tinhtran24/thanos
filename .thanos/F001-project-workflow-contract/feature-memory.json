@@ -1,0 +1,30 @@
+{
+  "business_rules": [
+    "Every active EC must pass independent code review before testing.",
+    "Every active EC must pass mapped ECs and adjacent smoke tests before completion.",
+    "Failed review or testing reopens development and stops the current run.",
+    "The active workflow protocol does not use numeric rounds or retry budgets.",
+    "Work items are identified by feature and EC name, for example Feature 001-EC1 Implement ABC.",
+    "Manual completion validates implementation, approved review, and passing test evidence instead of checking a legacy pending-review phase."
+  ],
+  "architectural_decisions": [
+    "ExecutionChunk remains the task decomposition and sequencing model.",
+    "Stable per-EC evidence files are implementation-note.md, review-report.md, and test-report.md.",
+    "Legacy round artifacts are promoted non-destructively when runtime state is loaded.",
+    "Legacy phases remain readable while new runs use planning, coding, reviewing, testing, overview, and done.",
+    "The orchestrator creates the prompts directory immediately before writing a role prompt."
+  ],
+  "affected_paths": [
+    "internal/model/model.go",
+    "internal/state/machine.go",
+    "internal/orchestrator/orchestrator.go",
+    "internal/prompts",
+    "internal/workspace/workspace.go",
+    "internal/cli",
+    "internal/tui",
+    "internal/featuregraph/graph.go",
+    "README.md",
+    "README.vi.md",
+    "Technical.md"
+  ]
+}
