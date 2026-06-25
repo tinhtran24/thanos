@@ -22,10 +22,10 @@ const (
 	compactModeHeightBreakpoint = 30
 )
 
-// compactLayout mirrors Crush's responsive layout: the sidebar collapses into
-// a one-line header when either terminal dimension becomes constrained.
+// compactLayout always reports true: the cli-sample layout is a single column
+// (header block, conversation stream, input box, status line) with no sidebar.
 func (m *modelUI) compactLayout() bool {
-	return m.width < compactModeWidthBreakpoint || m.height < compactModeHeightBreakpoint
+	return true
 }
 
 func (m *modelUI) contentWidth() int {
@@ -49,16 +49,13 @@ func (m *modelUI) relayout() {
 }
 
 // View returns the rendered frame plus the declarative terminal modes. In
-// Bubble Tea v2, AltScreen and MouseMode are fields on the View: when the user
-// enters mouse-select mode we set MouseMode=None so the terminal performs its
-// own text selection; otherwise CellMotion lets the app handle clicks/drags.
+// Bubble Tea v2, AltScreen and MouseMode are fields on the View. We never
+// capture the mouse (MouseMode=None) so the terminal's native click-drag text
+// selection — and copy — is always available, matching the cli-sample UX.
 func (m *modelUI) View() tea.View {
 	view := tea.NewView(m.render())
 	view.AltScreen = true
-	view.MouseMode = tea.MouseModeCellMotion
-	if m.selectMode {
-		view.MouseMode = tea.MouseModeNone
-	}
+	view.MouseMode = tea.MouseModeNone
 	// Place the real terminal cursor at the command box when it has focus
 	// (crush's pattern). The input's cursor X already includes the prompt width;
 	// the bottom bar is rendered at column 0, so only the row needs offsetting.
@@ -72,71 +69,84 @@ func (m *modelUI) View() tea.View {
 	return view
 }
 
+// render composes the single-column cli-sample layout:
+//
+//	┌ header block ┐   (logo · tagline · project/runner/feature/status grid)
+//	  conversation stream (full width)
+//	  thinking line       (spinner, only while running)
+//	─ input box ─         (top/bottom rule, ❯ prompt)
+//	 status line          ([ready]/[busy] · cwd ............ feature · phase)
 func (m *modelUI) render() string {
 	if m.width == 0 || m.height == 0 {
 		return "Starting Thanos…"
 	}
 
-	compact := m.compactLayout()
-	header := ""
-	if compact {
-		header = m.renderHeader()
+	status := m.renderStatusLine()
+	thinking := ""
+	if m.running {
+		thinking = m.renderThinking()
 	}
-	footer := m.renderFooter()
-	bottom := m.renderBottom()
+	bottom := m.renderBottom() // bordered input box; its top rule adds one row
 
-	bodyTop := lipgloss.Height(header)
-	bodyHeight := util.Max(0, m.height-bodyTop-lipgloss.Height(footer)-lipgloss.Height(bottom)-2)
+	statusH := lipgloss.Height(status)
+	bottomH := lipgloss.Height(bottom)
+	thinkingH := 0
+	if thinking != "" {
+		thinkingH = lipgloss.Height(thinking)
+	}
+
+	// Adaptive header: the full rounded block when it fits, else a one-line slim
+	// header, else nothing — so the frame never exceeds the terminal height.
+	header := m.renderHeaderBlock()
+	headerH := lipgloss.Height(header)
+	blankH := 1
+	fits := func(hh, bh int) bool { return hh + bh + bottomH + statusH + thinkingH <= m.height }
+	if !fits(headerH, blankH) {
+		header = m.renderHeaderSlim()
+		headerH = lipgloss.Height(header)
+		if !fits(headerH, blankH) {
+			header = ""
+			headerH = 0
+			blankH = 0
+		}
+	}
+
+	bodyHeight := util.Max(0, m.height-headerH-blankH-bottomH-statusH-thinkingH)
 	chatWidth := m.contentWidth()
 
-	// Chat is a flat canvas on the left. In wide mode the feature/EC tree is a
-	// fixed-width right sidebar; compact mode replaces it with the header.
 	m.chatH = 0
 	m.centerHeaderLines = 0
 	center := fitPanelHeight(m.renderCenter(chatWidth, bodyHeight), bodyHeight)
 	m.chatX0 = 1
-	m.chatY0 = bodyTop + 1 + m.centerHeaderLines
+	m.chatY0 = headerH + blankH + m.centerHeaderLines
 	m.chatW = chatWidth
 
+	// Single column: no sidebar/tree geometry.
 	m.sidebarX0 = 0
 	m.sidebarW = 0
 	m.treeY0 = 0
+	m.treeRows = nil
 
 	body := ""
 	if bodyHeight > 0 {
-		main := lipgloss.NewStyle().
-			Width(chatWidth).
-			Height(bodyHeight).
-			Render(center)
-		if compact {
-			body = main
-		} else {
-			right := fitPanelHeight(m.renderRightSidebar(wideSidebarWidth, bodyHeight), bodyHeight)
-			side := lipgloss.NewStyle().
-				Width(wideSidebarWidth).
-				Height(bodyHeight).
-				Render(right)
-			body = lipgloss.JoinHorizontal(lipgloss.Top, main, strings.Repeat(" ", paneGap), side)
-			m.sidebarX0 = 1 + chatWidth + paneGap
-			m.sidebarW = wideSidebarWidth
-			// Logo is two lines followed by a blank line before the tree.
-			m.treeY0 = bodyTop + 1 + 3
-		}
+		body = lipgloss.NewStyle().Width(chatWidth).Height(bodyHeight).Render(center)
 		body = lipgloss.NewStyle().PaddingLeft(1).Render(body)
 	}
 
-	// Record the textarea origin after any attachment and completion rows.
-	m.inputY0 = bodyTop + 1 + m.inputYOffset
+	// Textarea origin: header + blank line + body + thinking + input top rule,
+	// plus the attachment/completion rows counted in inputYOffset.
+	m.inputY0 = headerH + blankH + bodyHeight + thinkingH + 1 + m.inputYOffset
 	sections := make([]string, 0, 6)
 	if header != "" {
-		sections = append(sections, header)
+		sections = append(sections, header, "")
 	}
-	sections = append(sections, "")
 	if body != "" {
-		m.inputY0 += lipgloss.Height(body)
 		sections = append(sections, body)
 	}
-	sections = append(sections, bottom, footer)
+	if thinking != "" {
+		sections = append(sections, thinking)
+	}
+	sections = append(sections, bottom, status)
 
 	screen := strings.Join(sections, "\n")
 
@@ -153,6 +163,121 @@ func (m *modelUI) render() string {
 		screen = util.Overlay(screen, m.picker.View(), m.width, m.height)
 	}
 	return screen
+}
+
+// cli-sample-style chrome.
+var (
+	headerBlockStyle = lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(styles.Accent).
+				Padding(0, 2)
+
+	inputBoxStyle = lipgloss.NewStyle().
+			Border(lipgloss.NormalBorder(), true, false, true, false).
+			BorderForeground(styles.Muted)
+)
+
+// renderHeaderBlock draws the rounded cli-sample header: logo + tagline and a
+// left-labelled status grid (project / runner / feature / status).
+func (m *modelUI) renderHeaderBlock() string {
+	project := m.config.Project.Name
+	if project == "" {
+		project = filepath.Base(m.ws.Root)
+	}
+	runnerName := m.config.DefaultRunner
+	featureLine := styles.MutedS.Render("—")
+	if feature, ok := m.selected(); ok {
+		if feature.Runner != "" {
+			runnerName = feature.Runner
+		}
+		phase := styles.PhaseLabel(m.states[feature.ID].state.Phase)
+		featureLine = lipgloss.NewStyle().Foreground(styles.Text).Render(feature.ID) + styles.MutedS.Render(" · "+phase)
+	}
+
+	var statusCell string
+	switch {
+	case m.selectMode:
+		statusCell = styles.WarningS.Render("⊟ mouse-select")
+	case m.running:
+		frames := []string{"✶", "✷", "✸", "✹", "✺", "✹", "✸", "✷"}
+		statusCell = styles.AccentS.Render(frames[m.spinnerFrame%len(frames)] + " running")
+	default:
+		statusCell = styles.SuccessS.Render("● ready")
+	}
+
+	const leftCol = 9
+	label := func(s string) string {
+		if w := lipgloss.Width(s); w < leftCol {
+			s += strings.Repeat(" ", leftCol-w)
+		}
+		return styles.MutedS.Render(s)
+	}
+	value := func(s string) string { return lipgloss.NewStyle().Foreground(styles.Text).Render(s) }
+
+	body := strings.Join([]string{
+		styles.Title.Render("Thanos ") + styles.MutedS.Render("v"+m.version),
+		styles.MutedS.Render("Multi-role AI development framework"),
+		"",
+		label("project") + value(project),
+		label("runner") + value(runnerName),
+		label("feature") + featureLine,
+		label("status") + statusCell,
+	}, "\n")
+
+	return headerBlockStyle.Width(util.Max(20, util.Min(m.width-2, 60))).Render(body)
+}
+
+// renderHeaderSlim is the one-line header used when the terminal is too short
+// for the full rounded block: logo on the left, ready/running state on the right.
+func (m *modelUI) renderHeaderSlim() string {
+	logo := styles.Title.Render("Thanos ") + styles.MutedS.Render("v"+m.version)
+	st := styles.SuccessS.Render("● ready")
+	if m.running {
+		frames := []string{"✶", "✷", "✸", "✹", "✺", "✹", "✸", "✷"}
+		st = styles.AccentS.Render(frames[m.spinnerFrame%len(frames)] + " running")
+	}
+	space := util.Max(1, m.width-lipgloss.Width(logo)-lipgloss.Width(st))
+	return lipgloss.NewStyle().Width(m.width).Render(logo + strings.Repeat(" ", space) + st)
+}
+
+// renderThinking is the cli-sample spinner activity line shown while running.
+func (m *modelUI) renderThinking() string {
+	frames := []string{"✶", "✷", "✸", "✹", "✺", "✹", "✸", "✷"}
+	sp := styles.AccentS.Render(frames[m.spinnerFrame%len(frames)])
+	detail := []string{m.config.DefaultRunner, "esc to interrupt"}
+	return "  " + sp + " " + styles.AccentS.Render("running…") + " " + styles.MutedS.Render("("+strings.Join(detail, " · ")+")")
+}
+
+// renderStatusLine is the cli-sample bottom bar: mode + cwd on the left, the
+// selected feature tag on the right. Errors/notices take precedence.
+func (m *modelUI) renderStatusLine() string {
+	width := m.width
+	full := lipgloss.NewStyle().Width(width)
+	switch {
+	case m.err != nil:
+		return full.Render(styles.DangerS.Render("✗ " + util.Truncate(m.err.Error(), util.Max(10, width-4))))
+	case m.copyFlash != "":
+		return full.Render(styles.SuccessS.Render(util.Truncate(m.copyFlash, width)))
+	case m.notice != "":
+		return full.Render(styles.SuccessS.Render(util.Truncate(m.notice, width)))
+	}
+	mode := styles.SuccessS.Render(" [ready]")
+	if m.running {
+		mode = styles.WarningS.Render(" [busy]")
+	}
+	left := mode + styles.MutedS.Render("  "+util.CompactPath(m.ws.Root, 3))
+	right := m.featureTag() + "  "
+	pad := util.Max(1, width-lipgloss.Width(left)-lipgloss.Width(right))
+	return full.Render(left + strings.Repeat(" ", pad) + right)
+}
+
+func (m *modelUI) featureTag() string {
+	feature, ok := m.selected()
+	if !ok {
+		return styles.MutedS.Render("(no session)")
+	}
+	phase := styles.PhaseLabel(m.states[feature.ID].state.Phase)
+	return lipgloss.NewStyle().Foreground(styles.Text).Render(feature.ID) + styles.MutedS.Render(" · "+phase)
 }
 
 func fitPanelHeight(content string, height int) string {
@@ -328,10 +453,11 @@ func (m *modelUI) renderBottom() string {
 	composer := m.input.View(width)
 	m.inputYOffset += lipgloss.Height(composer) - m.input.Height()
 	parts = append(parts, composer)
+	boxed := inputBoxStyle.Width(width).Render(strings.Join(parts, "\n"))
 	return lipgloss.NewStyle().
 		Width(m.width).
 		PaddingLeft(1).
-		Render(strings.Join(parts, "\n"))
+		Render(boxed)
 }
 
 func (m *modelUI) renderFooter() string {
@@ -352,7 +478,7 @@ func (m *modelUI) renderFooter() string {
 	case m.focus == focusChat:
 		hint = "↑↓ pick · K/J range · y copy · click/drag mouse-copy · esc back · tab input"
 	case m.focus == focusInput:
-		hint = "paste single/multiline (line breaks kept) · enter submit · esc cancel · / commands · tab cycle"
+		hint = "/ commands · ↑↓ pick · tab accept · enter submit · esc cancel · paste keeps line breaks"
 	default:
 		hint = "↑↓ nav · →← EC · enter run · n new · x rm-EC · c clarify · m runner · / cmd · tab chat · ? help"
 	}
@@ -375,11 +501,12 @@ func helpEntries() []dialog.HelpEntry {
 		he("r", "reload workspace"),
 		he("ctrl+p", "fuzzy-find a session"),
 		he("/", "open the command box"),
+		he("↑ / ↓ (in / box)", "move the command suggestion · tab accepts"),
 		he("K / J (in chat)", "extend bubble selection"),
 		he("y (in chat)", "copy selected bubble(s) via OSC52"),
-		he("click / drag (chat)", "select bubble(s); release copies"),
-		he("ctrl+s", "mouse-select mode (native drag-select)"),
+		he("mouse drag", "select & copy any text natively (always on)"),
 		he("pgup / pgdn", "scroll the chat log"),
 		he("q / ctrl+c", "quit"),
+		he("esc / ?", "close this help"),
 	}
 }

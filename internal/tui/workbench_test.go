@@ -78,39 +78,33 @@ func TestTabCyclesFocusToChatAndInput(t *testing.T) {
 	}
 }
 
-func TestCrushResponsiveChatLayout(t *testing.T) {
+func TestSingleColumnChatLayout(t *testing.T) {
 	ui := newTestModel(t, model.Feature{ID: "F001-x", Title: "X", Status: "todo"})
 
-	_ = ui.View()
-	if ui.compactLayout() {
-		t.Fatal("140x40 should use the wide chat layout")
-	}
-	if ui.sidebarW != wideSidebarWidth {
-		t.Fatalf("wide sidebar width = %d, want %d", ui.sidebarW, wideSidebarWidth)
-	}
-	if ui.chatW != 140-2-wideSidebarWidth-paneGap {
-		t.Fatalf("wide chat width = %d", ui.chatW)
-	}
-
-	ui.Update(tea.WindowSizeMsg{Width: compactModeWidthBreakpoint - 1, Height: 40})
 	view := ui.View().Content
+	// The cli-sample layout is always a single column: no sidebar, chat spans the
+	// full content width, and the rounded header block carries the Thanos logo.
 	if !ui.compactLayout() {
-		t.Fatal("narrow terminal should use the compact chat layout")
+		t.Fatal("layout should always be single-column")
 	}
 	if ui.sidebarW != 0 {
-		t.Fatalf("compact sidebar width = %d, want 0", ui.sidebarW)
+		t.Fatalf("single-column sidebar width = %d, want 0", ui.sidebarW)
 	}
-	if ui.chatW != compactModeWidthBreakpoint-3 {
-		t.Fatalf("compact chat width = %d", ui.chatW)
+	if ui.chatW != 140-2 {
+		t.Fatalf("single-column chat width = %d, want %d", ui.chatW, 140-2)
 	}
-	if !strings.HasPrefix(util.StripANSI(view), "THANOS") {
-		t.Fatalf("compact layout should start with the one-line header:\n%s", view)
+	if !strings.Contains(util.StripANSI(view), "Thanos") {
+		t.Fatalf("header block should contain the Thanos logo:\n%s", view)
 	}
 
-	ui.Update(tea.WindowSizeMsg{Width: 140, Height: compactModeHeightBreakpoint - 1})
+	// Narrower and shorter terminals stay single-column.
+	ui.Update(tea.WindowSizeMsg{Width: 90, Height: 24})
 	_ = ui.View()
-	if !ui.compactLayout() {
-		t.Fatal("short terminal should use the compact chat layout")
+	if !ui.compactLayout() || ui.sidebarW != 0 {
+		t.Fatalf("narrow terminal should remain single-column (sidebarW=%d)", ui.sidebarW)
+	}
+	if ui.chatW != 90-2 {
+		t.Fatalf("narrow chat width = %d, want %d", ui.chatW, 90-2)
 	}
 }
 
@@ -279,27 +273,16 @@ func TestInputCursorSurfacedWhenFocused(t *testing.T) {
 	}
 }
 
-func TestMouseSelectModeTogglesMouseMode(t *testing.T) {
+func TestMouseSelectionAlwaysAvailable(t *testing.T) {
 	ui := newTestModel(t, model.Feature{ID: "F001-x", Title: "X", Status: "todo"})
-	// Default: the app captures the mouse (cell motion) to handle clicks/drags.
-	if ui.View().MouseMode != tea.MouseModeCellMotion {
-		t.Fatalf("default MouseMode = %v, want CellMotion", ui.View().MouseMode)
-	}
-	// ctrl+s releases mouse capture so the terminal does native text selection.
-	ui.Update(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
-	if !ui.selectMode {
-		t.Fatal("ctrl+s should enable select mode")
-	}
+	// The app never captures the mouse, so the terminal's native click-drag text
+	// selection (and copy) is always available — in every focus mode.
 	if ui.View().MouseMode != tea.MouseModeNone {
-		t.Fatalf("select-mode MouseMode = %v, want None", ui.View().MouseMode)
+		t.Fatalf("default MouseMode = %v, want None", ui.View().MouseMode)
 	}
-	// Esc resumes app mouse handling.
-	ui.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
-	if ui.selectMode {
-		t.Fatal("esc should disable select mode")
-	}
-	if ui.View().MouseMode != tea.MouseModeCellMotion {
-		t.Fatalf("after esc MouseMode = %v, want CellMotion", ui.View().MouseMode)
+	focusComposer(ui)
+	if ui.View().MouseMode != tea.MouseModeNone {
+		t.Fatalf("input-focus MouseMode = %v, want None", ui.View().MouseMode)
 	}
 }
 

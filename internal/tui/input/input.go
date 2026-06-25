@@ -6,6 +6,7 @@ package input
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"unicode"
 
@@ -28,7 +29,9 @@ var Commands = []Command{
 	{"/run", "run the selected session through its next phase"},
 	{"/new", "create a new session: /new <title>"},
 	{"/bugfix", "open a bugfix of the selected session: /bugfix <title>"},
+	{"/feature", "select a session by ID, or open the picker: /feature [id]"},
 	{"/runner", "switch model runner: /runner [name]"},
+	{"/agent", "switch model runner (alias of /runner): /agent [name]"},
 	{"/transition", "force a phase: /transition <phase>"},
 	{"/approve", "approve a pending session (alias of /done)"},
 	{"/done", "mark the selected pending session done"},
@@ -56,11 +59,12 @@ const maxContentHeight = 10000
 
 // Model wraps a textarea plus completion state.
 type Model struct {
-	ti         textarea.Model
-	width      int
-	focused    bool
-	noComplete bool // when true (form mode), suppress slash-command completions
-	err        error
+	ti              textarea.Model
+	width           int
+	focused         bool
+	noComplete      bool // when true (form mode), suppress slash-command completions
+	completionIndex int  // highlighted row in the slash-command dropdown
+	err             error
 }
 
 // SetCommandMode toggles slash-command completions. Disable it while collecting
@@ -143,9 +147,49 @@ func (m *Model) SetValue(v string) {
 // Err returns the most recent input validation error.
 func (m *Model) Err() error { return m.err }
 
+// HasCompletions reports whether the slash-command dropdown is currently shown.
+func (m *Model) HasCompletions() bool {
+	return m.focused && len(m.matches()) > 0
+}
+
+// MoveCompletion moves the highlighted completion by delta, wrapping around.
+func (m *Model) MoveCompletion(delta int) {
+	n := len(m.matches())
+	if n == 0 {
+		m.completionIndex = 0
+		return
+	}
+	m.completionIndex = ((m.completionIndex+delta)%n + n) % n
+}
+
+// AcceptCompletion replaces the input with the highlighted command name plus a
+// trailing space (ready for arguments). Returns false when no dropdown is shown.
+func (m *Model) AcceptCompletion() bool {
+	matches := m.matches()
+	if len(matches) == 0 {
+		return false
+	}
+	idx := m.completionIndex
+	if idx < 0 || idx >= len(matches) {
+		idx = 0
+	}
+	m.setValue(matches[idx].Name + " ")
+	m.ti.CursorEnd()
+	m.completionIndex = 0
+	return true
+}
+
 // Update forwards key/edit messages to the textarea.
 func (m *Model) Update(msg tea.Msg) tea.Cmd {
 	m.err = nil
+	before := m.ti.Value()
+	// Editing the text resets the completion highlight to the top; blink/cursor
+	// messages (which don't change the value) leave the selection alone.
+	defer func() {
+		if m.ti.Value() != before {
+			m.completionIndex = 0
+		}
+	}()
 	if pasted, ok := msg.(tea.PasteMsg); ok {
 		pasted.Content = sanitizeTextareaInput(normalizeLineEndings(pasted.Content))
 		if !m.pasteFits(pasted.Content) {
@@ -248,7 +292,10 @@ func (m *Model) matches() []Command {
 	return out
 }
 
-// View renders the optional completions popup above the input line.
+const completionMaxVisible = 6
+
+// View renders the optional completions popup above the input line. The
+// highlighted row (moved with ↑/↓) is marked and accepted with tab.
 func (m *Model) View(width int) string {
 	line := m.ti.View()
 	matches := m.matches()
@@ -257,12 +304,43 @@ func (m *Model) View(width int) string {
 	}
 	nameStyle := styles.AccentS.Bold(true)
 	descStyle := styles.MutedS
-	var rows []string
-	for i, c := range matches {
-		if i >= 6 {
-			break
+	selNameStyle := lipgloss.NewStyle().Foreground(styles.Accent).Bold(true)
+
+	idx := m.completionIndex
+	if idx >= len(matches) {
+		idx = len(matches) - 1
+	}
+	if idx < 0 {
+		idx = 0
+	}
+
+	// Window the visible rows so the highlighted entry is always shown.
+	start := 0
+	if len(matches) > completionMaxVisible {
+		start = idx - completionMaxVisible/2
+		if start < 0 {
+			start = 0
 		}
-		rows = append(rows, "  "+nameStyle.Render(c.Name)+"  "+descStyle.Render(c.Desc))
+		if start > len(matches)-completionMaxVisible {
+			start = len(matches) - completionMaxVisible
+		}
+	}
+	end := start + completionMaxVisible
+	if end > len(matches) {
+		end = len(matches)
+	}
+
+	var rows []string
+	for i := start; i < end; i++ {
+		c := matches[i]
+		if i == idx {
+			rows = append(rows, styles.AccentS.Render("> ")+selNameStyle.Render(c.Name)+"  "+descStyle.Render(c.Desc))
+		} else {
+			rows = append(rows, "  "+nameStyle.Render(c.Name)+"  "+descStyle.Render(c.Desc))
+		}
+	}
+	if len(matches) > completionMaxVisible {
+		rows = append(rows, descStyle.Render(fmt.Sprintf("  %d/%d · ↑↓ select · tab accept", idx+1, len(matches))))
 	}
 	popup := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder(), true, false, false, false).

@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generated_at": "2026-06-25T02:26:35.636706Z",
+  "generated_at": "2026-06-25T08:12:44.918544Z",
   "features": [
     {
       "id": "F001-project-workflow-contract",
@@ -105,7 +105,7 @@
           "source": "feature-memory"
         }
       ],
-      "updated_at": "2026-06-25T02:26:35.635098Z"
+      "updated_at": "2026-06-25T08:12:44.918124Z"
     }
   ],
   "edges": null

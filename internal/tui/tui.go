@@ -417,6 +417,16 @@ func (m *modelUI) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 			m.blurInput()
 			return m, nil
+		case "up":
+			if m.input.HasCompletions() {
+				m.input.MoveCompletion(-1)
+				return m, nil
+			}
+		case "down":
+			if m.input.HasCompletions() {
+				m.input.MoveCompletion(1)
+				return m, nil
+			}
 		case "enter":
 			if m.create.active {
 				return m.advanceCreate()
@@ -425,6 +435,10 @@ func (m *modelUI) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case "tab":
 			if m.create.active {
 				return m, nil // stay in the form; enter advances
+			}
+			if m.input.HasCompletions() {
+				m.input.AcceptCompletion()
+				return m, nil
 			}
 			m.cycleFocus()
 			return m, nil
@@ -651,11 +665,23 @@ func (m *modelUI) submitCommand() (tea.Model, tea.Cmd) {
 		return m.startSelected()
 	case "/new":
 		return m.startCreate(false, "", arg)
-	case "/runner":
+	case "/runner", "/agent":
 		if strings.HasPrefix(arg, "add ") || arg == "add" {
 			return m.runCLI("runner "+arg, append([]string{"runner"}, strings.Fields(arg)...))
 		}
 		m.setRunner(arg)
+	case "/feature":
+		if strings.TrimSpace(arg) == "" {
+			m.openPicker()
+			return m, nil
+		}
+		if !m.selectFeatureByID(arg) {
+			m.err = fmt.Errorf("no session matching %q", arg)
+			return m, nil
+		}
+		if feature, ok := m.selected(); ok {
+			m.notice = "Selected " + feature.ID + " — " + feature.Title
+		}
 	case "/approve", "/done":
 		if err := m.markDone(); err != nil {
 			m.err = err
@@ -827,13 +853,25 @@ func (m *modelUI) openPicker() {
 	m.picker = &picker
 }
 
-func (m *modelUI) selectFeatureByID(id string) {
+// selectFeatureByID moves the selection to the session with the given ID. It
+// first tries an exact ID match, then a case-insensitive prefix match, resets
+// the EC cursor to the feature row, and reports whether a match was found.
+func (m *modelUI) selectFeatureByID(id string) bool {
+	id = strings.TrimSpace(id)
 	for i, f := range m.features {
 		if f.ID == id {
-			m.cursor = i
-			return
+			m.cursor, m.ecCursor = i, -1
+			return true
 		}
 	}
+	lid := strings.ToLower(id)
+	for i, f := range m.features {
+		if strings.HasPrefix(strings.ToLower(f.ID), lid) {
+			m.cursor, m.ecCursor = i, -1
+			return true
+		}
+	}
+	return false
 }
 
 // --- run/state commands ------------------------------------------------------

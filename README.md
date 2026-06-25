@@ -37,6 +37,10 @@ Tea and Lip Gloss. It keeps Thanos's deterministic phase graph, role isolation,
 evidence gates, and human approval while presenting each feature as a resumable
 work session.
 
+<p align="center">
+  <img src="screenshoot/intro/intro.png" alt="Thanos terminal workbench: header block, workflow phases, and command box" width="900">
+</p>
+
 ## Why Thanos?
 
 Single-agent AI coding is fast, but it creates predictable risks:
@@ -289,23 +293,55 @@ your conventions.
 
 ## Working session UI
 
-The default experience (`thanos` or `thanos ui`) is a chat-first terminal app:
+The default experience (`thanos` or `thanos ui`) is a single-column, chat-first
+terminal app:
 
-- **Left** — the role-by-role agent conversation for the selected feature, with a
-  persistent multiline workflow panel (`planning → development → code review →
-  testing → memory → done`). It shows completed, active, pending, rejected, and
-  blocked states above the scrollable chat output.
-- **Right sidebar** — the THANOS logo, a clickable **Feature → EC tree** (each
-  chunk shows its status), the active model runner, and configured MCP servers.
-- **Command box** — type `/` for the full command palette (run, new,
-  bugfix, runner, transition, prompt, status, scan, doctor, memory, skill,
-  plugin, lsp, mcp, find, copy, clear, help). Attach files by pasting a path or
-  referencing `@path`; they are passed to the agent as run context. Paste
-  single-line or multiline text directly into the composer; line breaks are
-  preserved, and Enter submits or advances the active guided form.
+- **Header block** — the Thanos logo and a status grid: project, active runner,
+  the selected feature and phase, and the ready/running state.
+- **Conversation stream** — the selected feature's title and a workflow panel
+  (`planning → development → code review → testing → memory → done`) that shows
+  completed, active, pending, rejected, and blocked states, with the role-by-role
+  agent output streaming below it.
+- **Command box** — type `/` for the command palette. The suggestion dropdown is
+  navigable with `↑/↓` and accepted with `tab`. Attach files by pasting a path or
+  referencing `@path`; they are passed to the agent as run context. Paste single-
+  or multiline text directly; line breaks are preserved, and Enter submits or
+  advances the active guided form.
+- **Status line** — ready/busy, the working directory, and the selected feature.
 
-Tree keys: `↑↓` move, `→/←` descend into / out of a feature's ECs, `enter` run,
-`x` remove an EC, `c` answer a clarification, `n` new feature, `tab` switch panes.
+Mouse drag selects and copies any text natively — it is always available.
+
+### Command palette and navigation
+
+`/` opens the palette (`run`, `new`, `bugfix`, `feature`, `runner`/`agent`,
+`transition`, `prompt`, `status`, `scan`, `doctor`, `memory`, `skill`, `plugin`,
+`lsp`, `mcp`, `find`, `copy`, `clear`, `help`). Move the highlight with `↑/↓` and
+accept with `tab`. Switch features with `↑/↓`, run with `enter`, start a new
+feature with `n`, remove an EC with `x`, and answer a clarification with `c`.
+
+`ctrl+p` (or `/find`) opens the fuzzy session picker; `/feature <id>` jumps
+straight to a session:
+
+<p align="center">
+  <img src="screenshoot/intro/intro_feature.png" alt="Jump-to-session fuzzy picker" width="900">
+</p>
+
+### CLI commands stream into the view
+
+Workspace commands such as `thanos scan` run straight from the command box and
+stream their output inline:
+
+<p align="center">
+  <img src="screenshoot/intro/img_scan.png" alt="thanos scan streaming its output into the session view" width="900">
+</p>
+
+### Keyboard shortcuts
+
+Press `?` for the full keyboard reference:
+
+<p align="center">
+  <img src="screenshoot/intro/intro_helper.png" alt="Thanos keyboard shortcuts overlay" width="900">
+</p>
 
 ## Agent Skills from GitHub
 
