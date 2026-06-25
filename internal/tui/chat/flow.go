@@ -1,7 +1,6 @@
 package chat
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/tinhtran/thanos/internal/model"
@@ -17,10 +16,10 @@ type workflowStep struct {
 
 var workflowSteps = []workflowStep{
 	{model.PhasePlan, "Planning", "Analyze the ticket and generate execution tasks"},
-	{model.PhaseCode, "Coding", "Implement the current execution chunk"},
-	{model.PhaseTest, "EC tests", "Verify the current chunk against its acceptance cases"},
-	{model.PhaseOverview, "Overview", "Summarize changes, evidence, and open issues"},
-	{model.PhasePending, "Human review", "Waiting for final human approval"},
+	{model.PhaseCode, "Development", "Implement the current execution chunk and record evidence"},
+	{model.PhaseReview, "Code review", "Independently review the implementation and tests"},
+	{model.PhaseTest, "Testing", "Execute mapped ECs and adjacent smoke tests"},
+	{model.PhaseOverview, "Memory", "Summarize evidence and update feature memory"},
 	{model.PhaseDone, "Done", "Workflow completed"},
 }
 
@@ -37,12 +36,6 @@ func RenderWorkflow(current model.State, width int) string {
 		switch {
 		case current.Phase == model.PhaseDone && index <= active:
 			icon, style = "✓", styles.SuccessS
-		case current.Phase == model.PhaseAmend && step.phase == model.PhaseTest:
-			icon, style = "✕", styles.DangerS
-			description = reasonOr(current.Reason, "Rejected; returning the EC to coding")
-		case current.Phase == model.PhaseAmend && step.phase == model.PhaseCode:
-			icon, style = "◆", styles.WarningS.Bold(true)
-			description = fmt.Sprintf("Amending execution chunk, round %d", current.Round)
 		case (current.Phase == model.PhaseBlocked || current.Phase == model.PhaseAttention) && index == active:
 			icon, style = "■", styles.DangerS.Bold(true)
 			description = reasonOr(current.Reason, "Workflow blocked")
@@ -78,19 +71,23 @@ func workflowIndex(current model.State) int {
 		case model.RolePlanner:
 			return 0
 		case model.RoleTester:
+			return 3
+		case model.RoleReviewer:
 			return 2
 		case model.RoleAcceptor:
-			return 3
+			return 4
 		default:
 			return 1
 		}
 	}
 	// Map legacy sessions onto the nearest simplified step.
 	switch phase {
-	case model.PhaseDesign, model.PhaseDesignReview, model.PhaseReview:
+	case model.PhaseDesign, model.PhaseDesignReview:
 		phase = model.PhaseCode
 	case model.PhaseDeepReview, model.PhaseAccept:
 		phase = model.PhaseOverview
+	case model.PhasePending:
+		phase = model.PhaseDone
 	}
 	for index, step := range workflowSteps {
 		if step.phase == phase {

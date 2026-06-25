@@ -16,13 +16,19 @@ func (m *Model) OnEvent(ev model.Event) {
 		if i := m.openIndex(); i >= 0 {
 			m.messages[i].Done = true
 		}
+		workItem := ""
+		if ev.Data != nil {
+			if value, ok := ev.Data["work_item"].(string); ok {
+				workItem = value
+			}
+		}
 		m.messages = append(m.messages, Message{
-			ID:    m.id(),
-			Kind:  KindRole,
-			Role:  ev.Role,
-			Phase: ev.Phase,
-			Round: ev.Round,
-			TS:    ev.Timestamp,
+			ID:      m.id(),
+			Kind:    KindRole,
+			Role:    ev.Role,
+			Phase:   ev.Phase,
+			Context: workItem,
+			TS:      ev.Timestamp,
 		})
 		m.rerender()
 	case "transition":

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -119,26 +120,77 @@ func (w *Workspace) StatePath(id string) string  { return filepath.Join(w.Runtim
 func (w *Workspace) EnsureRuntime(feature model.Feature, config model.Config) (model.State, error) {
 	var current model.State
 	if err := readJSON(w.StatePath(feature.ID), &current); err == nil {
+		if err := w.migrateLegacyRoundArtifacts(feature.ID, current); err != nil {
+			return current, err
+		}
 		return current, nil
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return current, err
 	}
-	if err := os.MkdirAll(filepath.Join(w.RuntimeDir(feature.ID), "rounds"), 0o755); err != nil {
+	if err := os.MkdirAll(w.RuntimeDir(feature.ID), 0o755); err != nil {
 		return current, err
-	}
-	maxRounds := feature.MaxRounds
-	if maxRounds == 0 {
-		maxRounds = config.MaxRounds
 	}
 	now := time.Now().UTC()
 	current = model.State{
 		FeatureID: feature.ID,
 		Phase:     model.PhaseInit,
-		MaxRounds: maxRounds,
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
 	return current, w.WriteState(current)
+}
+
+// migrateLegacyRoundArtifacts promotes the newest reports from the old
+// rounds/round-N layout into the stable per-EC workflow artifact names. Existing
+// files are never overwritten and the legacy directories remain available as
+// history.
+func (w *Workspace) migrateLegacyRoundArtifacts(id string, current model.State) error {
+	prefix := ""
+	if current.ECTotal > 1 && current.ECIndex >= 1 {
+		prefix = fmt.Sprintf("ec-%d", current.ECIndex)
+	}
+	roundsRoot := filepath.Join(w.RuntimeDir(id), prefix, "rounds")
+	rounds, err := filepath.Glob(filepath.Join(roundsRoot, "round-*"))
+	if err != nil {
+		return err
+	}
+	sort.Slice(rounds, func(i, j int) bool {
+		return legacyRoundIndex(rounds[i]) < legacyRoundIndex(rounds[j])
+	})
+	mappings := map[string]string{
+		"coder-report.md":  "implementation-note.md",
+		"review-report.md": "review-report.md",
+		"test-report.md":   "test-report.md",
+	}
+	for legacyName, stableName := range mappings {
+		target := filepath.Join(w.RuntimeDir(id), prefix, stableName)
+		if _, err := os.Stat(target); err == nil {
+			continue
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		for index := len(rounds) - 1; index >= 0; index-- {
+			source := filepath.Join(rounds[index], legacyName)
+			data, readErr := os.ReadFile(source)
+			if errors.Is(readErr, os.ErrNotExist) {
+				continue
+			}
+			if readErr != nil {
+				return readErr
+			}
+			if err := os.WriteFile(target, data, 0o644); err != nil {
+				return err
+			}
+			break
+		}
+	}
+	return nil
+}
+
+func legacyRoundIndex(path string) int {
+	value := strings.TrimPrefix(filepath.Base(path), "round-")
+	index, _ := strconv.Atoi(value)
+	return index
 }
 
 func (w *Workspace) ReadState(id string) (model.State, error) {
@@ -169,9 +221,8 @@ func (w *Workspace) WriteArtifact(id, name, content string) error {
 	return os.WriteFile(path, []byte(content), 0o644)
 }
 
-// EnsureArtifactDir creates the directory that would hold the named (possibly
-// nested, e.g. "ec-1/rounds/round-2") artifact, so an agent subprocess can write
-// into it.
+// EnsureArtifactDir creates the directory that would hold the named nested
+// artifact, so an agent subprocess can write into it.
 func (w *Workspace) EnsureArtifactDir(id, name string) error {
 	return os.MkdirAll(filepath.Join(w.RuntimeDir(id), name), 0o755)
 }
@@ -217,6 +268,63 @@ func (w *Workspace) ReadArtifact(id, name string) (string, error) {
 func (w *Workspace) ArtifactExists(id, name string) bool {
 	_, err := os.Stat(filepath.Join(w.RuntimeDir(id), name))
 	return err == nil
+}
+
+// ValidateCompletionEvidence verifies that every active EC has implementation,
+// approved review, and passing test evidence.
+func (w *Workspace) ValidateCompletionEvidence(feature model.Feature, current model.State) error {
+	plan, err := w.ReadPlan(feature.ID)
+	if err != nil {
+		return err
+	}
+	chunks := plan.ActiveChunks()
+	if len(chunks) == 0 {
+		chunks = []model.ExecutionChunk{{Index: 1, ID: feature.ID + "-ec1", Title: feature.Title}}
+	}
+	for index, chunk := range chunks {
+		prefix := ""
+		if len(chunks) > 1 {
+			prefix = fmt.Sprintf("ec-%d", index+1)
+		}
+		for _, name := range []string{"implementation-note.md", "review-report.md", "test-report.md"} {
+			relative := filepath.Join(prefix, name)
+			if !w.ArtifactExists(feature.ID, relative) {
+				return fmt.Errorf("%s is not ready to complete: %s is missing %s", feature.ID, workItemLabel(feature, chunk, index+1), relative)
+			}
+		}
+		review, err := w.ReadArtifact(feature.ID, filepath.Join(prefix, "review-report.md"))
+		if err != nil {
+			return err
+		}
+		reviewUpper := strings.ToUpper(review)
+		if !reportPass(reviewUpper) || !strings.Contains(reviewUpper, "APPROVED") || strings.Contains(reviewUpper, "CHANGES REQUESTED") {
+			return fmt.Errorf("%s is not ready to complete: %s review is not approved", feature.ID, workItemLabel(feature, chunk, index+1))
+		}
+		testReport, err := w.ReadArtifact(feature.ID, filepath.Join(prefix, "test-report.md"))
+		if err != nil {
+			return err
+		}
+		if !reportPass(strings.ToUpper(testReport)) {
+			return fmt.Errorf("%s is not ready to complete: %s testing has not passed", feature.ID, workItemLabel(feature, chunk, index+1))
+		}
+	}
+	return nil
+}
+
+func reportPass(upper string) bool {
+	if index := strings.LastIndex(upper, "VERDICT"); index >= 0 {
+		upper = upper[index:]
+	}
+	return strings.Contains(upper, "PASS") && !strings.Contains(upper, "FAIL") && !strings.Contains(upper, "NOT RUN")
+}
+
+func workItemLabel(feature model.Feature, chunk model.ExecutionChunk, index int) string {
+	sequence := strings.TrimPrefix(strings.SplitN(feature.ID, "-", 2)[0], "F")
+	title := chunk.Title
+	if strings.TrimSpace(title) == "" {
+		title = feature.Title
+	}
+	return fmt.Sprintf("Feature %s-EC%d %s", sequence, index, title)
 }
 
 func (w *Workspace) resolveFeaturePath(id string) (string, error) {

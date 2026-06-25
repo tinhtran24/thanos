@@ -26,7 +26,6 @@ type Command struct {
 var Commands = []Command{
 	// Session lifecycle
 	{"/run", "run the selected session through its next phase"},
-	{"/continue", "resume the selected session from its failed round"},
 	{"/new", "create a new session: /new <title>"},
 	{"/bugfix", "open a bugfix of the selected session: /bugfix <title>"},
 	{"/runner", "switch model runner: /runner [name]"},

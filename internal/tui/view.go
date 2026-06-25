@@ -15,15 +15,25 @@ import (
 	"github.com/tinhtran/thanos/internal/tui/util"
 )
 
-const paneGap = 2
+const (
+	paneGap                     = 2
+	wideSidebarWidth            = 30
+	compactModeWidthBreakpoint  = 120
+	compactModeHeightBreakpoint = 30
+)
 
-// sidebarWidth is the width of the right column (logo + feature/EC tree + model).
-func (m *modelUI) sidebarWidth() int {
-	sw := util.Min(44, util.Max(32, m.width*2/5))
-	if m.width-sw-paneGap < 36 {
-		sw = util.Max(24, m.width-36-paneGap)
+// compactLayout mirrors Crush's responsive layout: the sidebar collapses into
+// a one-line header when either terminal dimension becomes constrained.
+func (m *modelUI) compactLayout() bool {
+	return m.width < compactModeWidthBreakpoint || m.height < compactModeHeightBreakpoint
+}
+
+func (m *modelUI) contentWidth() int {
+	width := util.Max(1, m.width-2)
+	if !m.compactLayout() {
+		width -= wideSidebarWidth + paneGap
 	}
-	return sw
+	return util.Max(1, width)
 }
 
 // relayout resizes layout-dependent components when the window changes.
@@ -32,7 +42,7 @@ func (m *modelUI) relayout() {
 		return
 	}
 	m.input.SetMaxHeight(util.Min(6, util.Max(1, m.height/3)))
-	m.input.SetWidth(m.width - 2)
+	m.input.SetWidth(m.contentWidth())
 	if m.picker != nil {
 		m.picker.SetSize(m.width, m.height)
 	}
@@ -54,6 +64,7 @@ func (m *modelUI) View() tea.View {
 	// the bottom bar is rendered at column 0, so only the row needs offsetting.
 	if m.focus == focusInput && m.picker == nil && m.confirm == nil && m.clarify == nil && !m.showHelp {
 		if cur := m.input.Cursor(); cur != nil {
+			cur.X++
 			cur.Y += m.inputY0
 			view.Cursor = cur
 		}
@@ -66,39 +77,61 @@ func (m *modelUI) render() string {
 		return "Starting Thanos…"
 	}
 
-	header := m.renderHeader()
+	compact := m.compactLayout()
+	header := ""
+	if compact {
+		header = m.renderHeader()
+	}
 	footer := m.renderFooter()
 	bottom := m.renderBottom()
 
 	bodyTop := lipgloss.Height(header)
-	bodyHeight := util.Max(0, m.height-lipgloss.Height(header)-lipgloss.Height(footer)-lipgloss.Height(bottom)-3)
+	bodyHeight := util.Max(0, m.height-bodyTop-lipgloss.Height(footer)-lipgloss.Height(bottom)-2)
+	chatWidth := m.contentWidth()
 
-	sidebarW := m.sidebarWidth()
-	chatWidth := util.Max(30, m.width-sidebarW-paneGap)
-
-	// Chat is the main pane on the LEFT; the feature/EC tree sidebar is on the RIGHT.
+	// Chat is a flat canvas on the left. In wide mode the feature/EC tree is a
+	// fixed-width right sidebar; compact mode replaces it with the header.
 	m.chatH = 0
-	center := m.renderCenter(chatWidth-4, bodyHeight)
-	right := m.renderRightSidebar(sidebarW-4, bodyHeight)
-	chatPanel := m.renderPanel(center, chatWidth, bodyHeight, m.focus == focusChat)
-	m.chatX0 = 2 // left panel border + padding
+	m.centerHeaderLines = 0
+	center := fitPanelHeight(m.renderCenter(chatWidth, bodyHeight), bodyHeight)
+	m.chatX0 = 1
 	m.chatY0 = bodyTop + 1 + m.centerHeaderLines
-	m.chatW = chatWidth - 4
+	m.chatW = chatWidth
 
-	sidePanel := m.renderPanel(right, sidebarW, bodyHeight, m.focus == focusSessions)
-	// Tree row geometry (border + logo(2) + blank(1) inside the right panel).
-	m.sidebarX0 = chatWidth + paneGap + 2
-	m.sidebarW = sidebarW - 4
-	m.treeY0 = bodyTop + 1 + 3
+	m.sidebarX0 = 0
+	m.sidebarW = 0
+	m.treeY0 = 0
 
 	body := ""
 	if bodyHeight > 0 {
-		body = lipgloss.JoinHorizontal(lipgloss.Top, chatPanel, strings.Repeat(" ", paneGap), sidePanel)
+		main := lipgloss.NewStyle().
+			Width(chatWidth).
+			Height(bodyHeight).
+			Render(center)
+		if compact {
+			body = main
+		} else {
+			right := fitPanelHeight(m.renderRightSidebar(wideSidebarWidth, bodyHeight), bodyHeight)
+			side := lipgloss.NewStyle().
+				Width(wideSidebarWidth).
+				Height(bodyHeight).
+				Render(right)
+			body = lipgloss.JoinHorizontal(lipgloss.Top, main, strings.Repeat(" ", paneGap), side)
+			m.sidebarX0 = 1 + chatWidth + paneGap
+			m.sidebarW = wideSidebarWidth
+			// Logo is two lines followed by a blank line before the tree.
+			m.treeY0 = bodyTop + 1 + 3
+		}
+		body = lipgloss.NewStyle().PaddingLeft(1).Render(body)
 	}
 
 	// Record the textarea origin after any attachment and completion rows.
-	m.inputY0 = lipgloss.Height(header) + m.inputYOffset
-	sections := []string{header}
+	m.inputY0 = bodyTop + 1 + m.inputYOffset
+	sections := make([]string, 0, 6)
+	if header != "" {
+		sections = append(sections, header)
+	}
+	sections = append(sections, "")
 	if body != "" {
 		m.inputY0 += lipgloss.Height(body)
 		sections = append(sections, body)
@@ -120,25 +153,6 @@ func (m *modelUI) render() string {
 		screen = util.Overlay(screen, m.picker.View(), m.width, m.height)
 	}
 	return screen
-}
-
-func (m *modelUI) renderPanel(content string, width, height int, focused bool) string {
-	if height <= 0 {
-		return ""
-	}
-	if height < 3 {
-		lines := strings.Split(fitPanelHeight(content, height), "\n")
-		for i := range lines {
-			lines[i] = util.Truncate(lines[i], util.Max(1, width))
-		}
-		return strings.Join(lines, "\n")
-	}
-	content = fitPanelHeight(content, util.Max(1, height-2))
-	style := styles.Panel(width, height)
-	if focused {
-		style = styles.FocusedPanel(width, height)
-	}
-	return style.Render(content)
 }
 
 func fitPanelHeight(content string, height int) string {
@@ -224,7 +238,7 @@ func (m *modelUI) renderCenter(width, bodyHeight int) string {
 	flow := chat.RenderWorkflow(current, width)
 
 	headerLines := lipgloss.Height(title) + lipgloss.Height(meta) + lipgloss.Height(flow) + 1
-	chatHeight := util.Max(1, (bodyHeight-2)-headerLines)
+	chatHeight := util.Max(1, bodyHeight-headerLines)
 	m.chat.SetSize(width, chatHeight)
 	m.centerHeaderLines = headerLines
 	m.chatH = chatHeight
@@ -304,7 +318,7 @@ func (m *modelUI) renderSidebar(width int) string {
 }
 
 func (m *modelUI) renderBottom() string {
-	width := m.width - 2
+	width := m.contentWidth()
 	var parts []string
 	m.inputYOffset = 0
 	if strip := m.attach.View(width); strip != "" {
@@ -314,7 +328,10 @@ func (m *modelUI) renderBottom() string {
 	composer := m.input.View(width)
 	m.inputYOffset += lipgloss.Height(composer) - m.input.Height()
 	parts = append(parts, composer)
-	return lipgloss.NewStyle().Width(m.width).Render(strings.Join(parts, "\n"))
+	return lipgloss.NewStyle().
+		Width(m.width).
+		PaddingLeft(1).
+		Render(strings.Join(parts, "\n"))
 }
 
 func (m *modelUI) renderFooter() string {

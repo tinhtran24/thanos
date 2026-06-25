@@ -4,15 +4,15 @@ Thanos is a multi-role AI development framework written in Go. It splits the
 software engineering loop into isolated specialist phases:
 
 ```
-Planning -> Coding -> EC Test -> Overview -> Human Review -> Done
-                              ^       |        |          |
-                              +-------+--------+----------+
-                                      Amend
+Planning -> Development -> Review -> Testing -> Memory -> Done
+                ^             |          |
+                +-------------+----------+
+                     reopen on failure
 ```
 
 Each phase is driven by a dedicated AI agent. The Go CLI owns deterministic
-concerns—state transitions, dependency checks, round limits, required artifacts,
-event logs, and the human completion gate—while AI runners receive role-specific
+concerns—state transitions, dependency checks, required artifacts, event logs,
+and completion gates—while AI runners receive role-specific
 prompts through stdin.
 
 Like 4X strategy games (eXplore, eXpand, eXploit, eXterminate), distinct roles
@@ -28,16 +28,16 @@ with distinct strengths converge to conquer complexity.
   feature relationships, and affected paths
 - Bugfix-to-feature mapping with inherited impact context
 - Full prompt suite derived from the upstream 4x role templates
-- Planner, Coder, Tester, and Overview pipeline
+- Planner, Coder, Reviewer, Tester, and Memory pipeline
 - Mini-Coder, Re-Verifier, Synthesizer, and Gate prompts for specialized workflows
 - File-based `.thanos/` protocol for auditability and crash recovery
 - Local codebase graph with symbols, calls, imports, tests, hubs, and conventions
-- Deterministic state machine and amendment round budget
+- Deterministic state machine and evidence gates
 - Configurable runner commands; Codex is the default
 - Feature dependencies and short feature IDs such as `F001`
 - Required artifact validation between phases
 - Append-only JSONL event history
-- Human `pending-review` gate before completion
+- Automatic completion only after review and testing pass
 - No AI SDK dependency or vendor lock-in
 
 ## Terminal UI architecture
@@ -80,19 +80,20 @@ same session at its current validated phase.
 
 `internal/orchestrator/orchestrator.go` first runs the **planner** role, which
 writes `execution-plan.yaml` (`model.ExecutionPlan` → `[]model.ExecutionChunk`).
-The orchestrator then iterates the chunks: each EC runs
-`code ↔ EC test` until its acceptance cases pass. After the last EC, Overview
-synthesizes results and moves the feature to `pending-review`.
+The orchestrator then iterates the chunks: each EC runs development, independent
+review, and EC/smoke testing. A failed review or test reopens development and
+stops the run so evidence can be addressed. After the last EC, the Memory role
+synthesizes results, refreshes project memory, and marks the feature done.
 
-- `model.State` gains `ECIndex` (1-based; 0 during planning), `ECTotal`, `ECID`;
-  `Round` is the **per-EC** amend counter, reset when a chunk's coding begins.
+- `model.State` uses `ECIndex` (1-based; 0 during planning), `ECTotal`, and
+  `ECID`. The active protocol has no numeric round or retry budget.
 - Artifacts are EC-scoped via `ec-<i>/…` when `ECTotal > 1`; a single implicit
   chunk keeps the flat feature-root layout (backward compatible). Helpers
   `ecDir`/`ecPrefix`/`ecJoin` build the paths; prompts receive the prefix as
   `Data.ECPrefix` and the chunk as `Data.ExecutionChunk`.
-- State-machine flow (`internal/state/machine.go`): `Init → Plan → Code → Test`;
-  a failed test enters `Amend` and re-runs coding, while a passing test starts
-  the next EC or advances to `Overview`.
+- State-machine flow (`internal/state/machine.go`):
+  `Init → Plan → Code → Review → Test → Overview → Done`. Failed review or
+  testing transitions back to Code.
 
 ### Clarification protocol
 
@@ -274,10 +275,9 @@ configured executables exist.
       clarify.json           # written by a role when blocked; pauses the run
       clarify-answer.md      # written by `thanos clarify`; consumed on resume
       context/attachments.md # staged files / @-refs passed to the agent
-      rounds/
-        round-1/
-          coder-report.md
-          test-report.md
+      implementation-note.md
+      review-report.md
+      test-report.md
     ec-2/
       ...
 ```
@@ -294,14 +294,13 @@ kept separately so interrupted runs can resume without shared model context.
 | `thanos init` | Initialize `.thanos/` without network access |
 | `thanos new` | Create a feature |
 | `thanos run` | Run or resume the agent loop |
-| `thanos continue` | Resume a stalled feature from its last failed round |
 | `thanos status` | List feature and phase status |
 | `thanos plan ls\|add\|rm FEATURE_ID` | List/add/remove a feature's execution chunks |
 | `thanos clarify FEATURE_ID "<answer>"` | Answer a paused clarification and resume |
 | `thanos ask "<prompt>" [--runner NAME]` | One-off headless prompt to the runner |
 | `thanos prompt` | Render one role prompt without running it |
 | `thanos transition` | Perform a validated manual transition |
-| `thanos done` | Apply human approval |
+| `thanos done` | Complete a legacy `pending-review` feature |
 | `thanos doctor` | Validate configured runner executables |
 | `thanos scan` | Build or refresh the local codebase graph |
 | `thanos skill find` | Search the open agent-skill directory through `npx skills find` |
@@ -413,6 +412,6 @@ feature acceptance.
 ## Safety model
 
 Thanos does not treat an LLM prompt as a security boundary. The CLI enforces the
-phase graph, dependencies, round limits, report presence, and completion gate.
+phase graph, dependencies, report presence, and completion gates.
 Runner processes still execute with the operating-system permissions of the user,
 so use them only in repositories where autonomous edits are acceptable.

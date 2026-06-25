@@ -198,9 +198,12 @@ func UpdateFromArtifacts(dotDir string, feature model.Feature) error {
 	} else if !errors.Is(readErr, os.ErrNotExist) {
 		return readErr
 	}
-	reports, err := filepath.Glob(filepath.Join(dotDir, feature.ID, "rounds", "round-*", "coder-report.md"))
+	reports, err := filepath.Glob(filepath.Join(dotDir, feature.ID, "*", "implementation-note.md"))
 	if err != nil {
 		return err
+	}
+	if rootReport := filepath.Join(dotDir, feature.ID, "implementation-note.md"); fileExists(rootReport) {
+		reports = append(reports, rootReport)
 	}
 	for _, report := range reports {
 		paths, readErr := pathsFromCoderReport(report)
@@ -209,13 +212,18 @@ func UpdateFromArtifacts(dotDir string, feature model.Feature) error {
 		}
 		for _, path := range paths {
 			node.Paths = appendUniquePath(node.Paths, Path{
-				Path: path, Kind: classifyPath(path), Source: "coder-report",
+				Path: path, Kind: classifyPath(path), Source: "implementation-note",
 			})
 		}
 	}
 	upsertFeature(&graph, node)
 	rebuildEdges(&graph)
 	return Save(dotDir, graph)
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 func Resolve(dotDir, featureID string) (Context, error) {
@@ -522,7 +530,7 @@ func sourceRank(source string) int {
 	switch source {
 	case "feature-memory":
 		return 3
-	case "coder-report":
+	case "implementation-note", "coder-report":
 		return 2
 	case "declared-scope":
 		return 1

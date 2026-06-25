@@ -7,21 +7,21 @@ Go. Framework điều phối các AI coding agent chuyên biệt qua một quy t
 thuật phần mềm có kiểm soát:
 
 ```text
-Lập kế hoạch ─▶ chia feature thành các phần thực thi có thứ tự (EC-1, EC-2, …)
+QA lập kế hoạch -> chia ticket thành các phần thực thi có thứ tự (EC-1, EC-2, ...)
 
 sau đó chạy LẦN LƯỢT từng phần đến khi hoàn tất rồi mới sang phần kế tiếp:
 
-  EC-n: Thiết kế → Duyệt thiết kế → Lập trình → Review → Kiểm thử → Deep Review
-                                       ↑           │          │            │
-                                       └───────────┴──────────┴────────────┘
-                                                     Sửa lỗi
+  EC-n: Phát triển -> Code Review -> EC + Smoke Test
+              ^            |                |
+              +------------+----------------+
+                    mở lại khi gate lỗi
 
-sau phần cuối cùng: Nghiệm thu → Human Review → Done
+sau phần cuối cùng: Tổng hợp evidence + Feature Memory -> Done
 ```
 
 Một bước lập kế hoạch chia feature thành các **execution chunk (EC)** có thứ tự.
-Thanos chạy EC-1 qua trọn chu trình, rồi EC-2, … — nên một feature lớn được giao
-thành chuỗi lát cắt nhỏ, review độc lập, thay vì một vòng lặp sửa lỗi dài.
+Thanos chạy EC-1 qua phát triển, review độc lập và kiểm thử, rồi mới chạy EC-2.
+Gate lỗi sẽ mở lại development với evidence và dừng lượt chạy hiện tại.
 
 Thanos phù hợp khi một AI agent duy nhất không đủ đáng tin cậy. Thay vì để cùng
 một model tự thiết kế, viết code, review và phê duyệt kết quả của chính nó,
@@ -43,13 +43,13 @@ Quy trình AI coding một agent thường nhanh nhưng có các rủi ro:
 - Skill bị sao chép và lệch phiên bản giữa Codex, Claude Code, Cursor và Gemini.
 
 Thanos đưa các kiểm soát quan trọng vào Go CLI. AI model phụ trách suy luận và
-sinh code; Thanos phụ trách state machine, dependency, giới hạn vòng sửa lỗi,
-kiểm tra artifact, khôi phục tiến trình và bước phê duyệt của con người.
+sinh code; Thanos phụ trách state machine, dependency, kiểm tra artifact, khôi
+phục tiến trình và quality gate.
 
 ## Tính năng chính
 
-- **Phát triển phần mềm đa AI agent:** các vai trò Designer, Coder, Reviewer,
-  Tester, Deep Reviewer và Acceptor hoạt động độc lập.
+- **Workflow theo contract:** Planner, Coder, Reviewer, Tester và Memory hoạt
+  động độc lập với quality gate rõ ràng.
 - **Quality gate deterministic:** chuyển phase và report bắt buộc được kiểm tra
   bằng Go, không phụ thuộc vào việc AI có tuân thủ prompt hay không.
 - **Không phụ thuộc nhà cung cấp AI:** chạy với Codex, Claude Code, Cursor,
@@ -58,10 +58,8 @@ kiểm tra artifact, khôi phục tiến trình và bước phê duyệt của c
   `.thanos/`.
 - **Codebase graph cục bộ:** lập chỉ mục file, symbol, lời gọi hàm, import, test,
   hub symbol và convention của repository.
-- **Review đối kháng:** review thông thường và deep review kiểm tra các nhóm lỗi
-  khác nhau.
-- **Human-in-the-loop:** feature dừng ở `pending-review` cho đến khi người dùng
-  chạy `thanos done`.
+- **Hoàn tất có kiểm soát:** feature chỉ Done khi mọi EC có review được duyệt và
+  EC/smoke test đều pass.
 - **Cài Agent Skills từ GitHub:** tìm kiếm và cài skill qua hệ sinh thái
   `npx skills`.
 - **Đồng bộ skill đa runner:** dùng một nguồn skill chuẩn và liên kết vào thư
@@ -155,13 +153,10 @@ liệu ở local, không cần SaaS, API key hoặc upload source code.
 | Vai trò | Trách nhiệm | Output chính |
 |---|---|---|
 | Planner | Chia feature thành các execution chunk (EC) có thứ tự | `execution-plan.yaml` |
-| Designer | Chuyển yêu cầu của một EC thành phạm vi triển khai cụ thể | Task brief, acceptance criteria, test strategy |
-| Design Reviewer | Phát hiện thiếu sót kiến trúc trước khi code | `design-review-report.md` |
-| Coder | Triển khai đúng task brief đã duyệt | Source code và `coder-report.md` |
+| Coder | Triển khai EC và ghi evidence kiểm tra | Source code và `implementation-note.md` |
 | Reviewer | Kiểm tra correctness, security, scope và project rules | `review-report.md` |
-| Tester | Xác minh từng acceptance criterion bằng evidence | `test-report.md` |
-| Deep Reviewer | Review đối kháng, cross-file và kiến trúc | `deep-review-report.md` |
-| Acceptor | Tổng hợp mức độ sẵn sàng và issue còn mở | `final-report.md` |
+| Tester | Tạo EC, chạy kiểm thử và smoke test bằng evidence | `test-report.md` |
+| Memory | Tổng hợp evidence và cập nhật feature graph | `final-report.md`, `feature-memory.json` |
 
 Thanos còn có prompt chuyên biệt cho Mini-Coder, Re-Verifier, Synthesizer và
 Evolution Gate.
@@ -281,18 +276,12 @@ Thanos gọi Claude Code plugin CLI chính thức và ghi lại thao tác thành
 └── F001-oauth2-authentication/
     ├── state.json
     ├── events.jsonl
-    ├── task-brief.md
-    ├── acceptance-criteria.md
-    ├── test-strategy.yaml
-    ├── design-review-report.md
     ├── final-report.md
     ├── retro-learnings.json
-    └── rounds/
-        └── round-1/
-            ├── coder-report.md
-            ├── review-report.md
-            ├── test-report.md
-            └── deep-review-report.md
+    ├── feature-memory.json
+    ├── implementation-note.md
+    ├── review-report.md
+    └── test-report.md
 ```
 
 Filesystem là nguồn dữ liệu chính. Các agent không cần hidden shared context và
@@ -305,14 +294,13 @@ process bị lỗi có thể chạy lại từ phase đã được xác nhận g
 | `thanos init` | Khởi tạo workspace, không cần network |
 | `thanos new` | Tạo feature specification |
 | `thanos run` | Chạy hoặc tiếp tục multi-agent workflow |
-| `thanos continue` | Tiếp tục feature đang kẹt từ round lỗi gần nhất |
-| `thanos status` | Xem phase và round hiện tại |
+| `thanos status` | Xem trạng thái và phase hiện tại |
 | `thanos plan ls\|add\|rm` | Liệt kê / thêm / xoá execution chunk (EC) của feature |
 | `thanos clarify` | Trả lời câu hỏi đang chờ và tiếp tục chạy |
 | `thanos ask "<prompt>"` | Gửi một prompt rời cho runner (headless, không qua pipeline) |
 | `thanos prompt` | Render prompt mà không chạy runner |
 | `thanos transition` | Chuyển phase thủ công có kiểm tra |
-| `thanos done` | Phê duyệt feature đang chờ review |
+| `thanos done` | Hoàn tất feature cũ đang ở `pending-review` |
 | `thanos doctor` | Kiểm tra executable của runner |
 | `thanos scan` | Tạo hoặc làm mới codebase graph cục bộ |
 | `thanos skill find` | Tìm Agent Skills |

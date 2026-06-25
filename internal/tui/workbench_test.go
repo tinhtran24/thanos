@@ -13,6 +13,7 @@ import (
 	"github.com/tinhtran/thanos/internal/model"
 	"github.com/tinhtran/thanos/internal/tui/attachments"
 	"github.com/tinhtran/thanos/internal/tui/dialog"
+	"github.com/tinhtran/thanos/internal/tui/util"
 	"github.com/tinhtran/thanos/internal/workspace"
 )
 
@@ -74,6 +75,60 @@ func TestTabCyclesFocusToChatAndInput(t *testing.T) {
 	ui.Update(tea.KeyPressMsg{Code: tea.KeyTab})
 	if ui.focus != focusSessions {
 		t.Fatalf("after third tab focus = %d, want sessions", ui.focus)
+	}
+}
+
+func TestCrushResponsiveChatLayout(t *testing.T) {
+	ui := newTestModel(t, model.Feature{ID: "F001-x", Title: "X", Status: "todo"})
+
+	_ = ui.View()
+	if ui.compactLayout() {
+		t.Fatal("140x40 should use the wide chat layout")
+	}
+	if ui.sidebarW != wideSidebarWidth {
+		t.Fatalf("wide sidebar width = %d, want %d", ui.sidebarW, wideSidebarWidth)
+	}
+	if ui.chatW != 140-2-wideSidebarWidth-paneGap {
+		t.Fatalf("wide chat width = %d", ui.chatW)
+	}
+
+	ui.Update(tea.WindowSizeMsg{Width: compactModeWidthBreakpoint - 1, Height: 40})
+	view := ui.View().Content
+	if !ui.compactLayout() {
+		t.Fatal("narrow terminal should use the compact chat layout")
+	}
+	if ui.sidebarW != 0 {
+		t.Fatalf("compact sidebar width = %d, want 0", ui.sidebarW)
+	}
+	if ui.chatW != compactModeWidthBreakpoint-3 {
+		t.Fatalf("compact chat width = %d", ui.chatW)
+	}
+	if !strings.HasPrefix(util.StripANSI(view), "THANOS") {
+		t.Fatalf("compact layout should start with the one-line header:\n%s", view)
+	}
+
+	ui.Update(tea.WindowSizeMsg{Width: 140, Height: compactModeHeightBreakpoint - 1})
+	_ = ui.View()
+	if !ui.compactLayout() {
+		t.Fatal("short terminal should use the compact chat layout")
+	}
+}
+
+func TestRenderedChatLayoutFitsTerminalWidth(t *testing.T) {
+	ui := newTestModel(t, model.Feature{ID: "F001-x", Title: "X", Status: "todo"})
+
+	for _, size := range []tea.WindowSizeMsg{
+		{Width: 140, Height: 40},
+		{Width: 100, Height: 40},
+		{Width: 140, Height: 25},
+	} {
+		ui.Update(size)
+		view := ui.View().Content
+		for row, line := range strings.Split(view, "\n") {
+			if got := lipgloss.Width(line); got > size.Width {
+				t.Fatalf("%dx%d row %d width = %d, want <= %d:\n%s", size.Width, size.Height, row, got, size.Width, line)
+			}
+		}
 	}
 }
 
@@ -139,7 +194,7 @@ func TestNewSessionFlowCollectsDescriptionAndAcceptance(t *testing.T) {
 func TestMouseClickSelectsChatBubbleAndReleaseCopies(t *testing.T) {
 	ui := newTestModel(t, model.Feature{ID: "F001-x", Title: "X", Status: "todo"})
 	// Inject some chat content and render once so the chat rectangle is known.
-	ui.chat.OnEvent(model.Event{Type: "role-start", Role: model.RoleCoder, Round: 1})
+	ui.chat.OnEvent(model.Event{Type: "role-start", Role: model.RoleCoder})
 	ui.chat.Append("hello from the coder\n")
 	_ = ui.View()
 

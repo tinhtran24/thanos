@@ -1,7 +1,8 @@
 // Package tui is the interactive Thanos workbench. It composes crush-style
 // component packages (chat, sidebar, dialog, input, attachments) into a
-// chat-first layout: a role-attributed agent chat log on the left, and a right
-// sidebar with the logo, the Feature→EC tree, and model/MCP info. The
+// chat-first layout: a role-attributed agent chat log on the left and, on wide
+// terminals, a right sidebar with the logo, Feature→EC tree, and model/MCP
+// info. Compact terminals collapse the sidebar into a one-line header. The
 // orchestrator/state logic is unchanged.
 package tui
 
@@ -648,8 +649,6 @@ func (m *modelUI) submitCommand() (tea.Model, tea.Cmd) {
 			return m, m.createFeature(arg)
 		}
 		return m.startSelected()
-	case "/continue":
-		return m.startContinueSelected()
 	case "/new":
 		return m.startCreate(false, "", arg)
 	case "/runner":
@@ -847,17 +846,9 @@ func (m *modelUI) startSelected() (tea.Model, tea.Cmd) {
 	return m.startAgent(feature, "run")
 }
 
-func (m *modelUI) startContinueSelected() (tea.Model, tea.Cmd) {
-	feature, ok := m.selected()
-	if !ok {
-		return m, nil
-	}
-	return m.startAgent(feature, "continue")
-}
-
 // startAgent runs `thanos <sub> <feature>` as a subprocess and streams its
 // output into the chat, tailing the feature's events.jsonl so each phase role
-// appears as its own bubble (identical for run and continue).
+// appears as its own bubble.
 func (m *modelUI) startAgent(feature model.Feature, sub string) (tea.Model, tea.Cmd) {
 	if m.running {
 		m.err = errors.New("a task is already running")
@@ -1231,11 +1222,14 @@ func (m *modelUI) markDone() error {
 		return errors.New("no session selected")
 	}
 	snapshot := m.states[feature.ID]
-	if !snapshot.ok || snapshot.state.Phase != model.PhasePending {
-		return fmt.Errorf("%s is not pending human review", feature.ID)
+	if !snapshot.ok {
+		return fmt.Errorf("%s has no workflow state", feature.ID)
 	}
 	current := snapshot.state
-	current, err := state.Transition(current, model.PhaseDone)
+	if err := m.ws.ValidateCompletionEvidence(feature, current); err != nil {
+		return err
+	}
+	current, err := state.Complete(current)
 	if err != nil {
 		return err
 	}

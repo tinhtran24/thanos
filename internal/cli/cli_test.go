@@ -216,114 +216,6 @@ func TestInitHelpIncludesFramework(t *testing.T) {
 	}
 }
 
-func TestContinueHelpIsDocumented(t *testing.T) {
-	var output strings.Builder
-	printHelp(&output)
-	if !strings.Contains(output.String(), "thanos continue FEATURE_ID") {
-		t.Fatalf("help = %q", output.String())
-	}
-}
-
-func TestPrepareContinueResumesLatestFailedRound(t *testing.T) {
-	ws := initializedWorkspace(t)
-	feature := model.Feature{ID: "F002-test", Title: "Test", Status: "todo"}
-	if err := ws.SaveFeature(feature); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Join(ws.RuntimeDir(feature.ID), "rounds", "round-3"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	reportPath := filepath.Join(ws.RuntimeDir(feature.ID), "rounds", "round-3", "review-report.md")
-	if err := os.WriteFile(reportPath, []byte("## Verdict\nFAIL — 12/13 criteria met"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := ws.WriteState(model.State{
-		FeatureID: feature.ID,
-		Phase:     model.PhaseAttention,
-		Round:     5,
-		MaxRounds: 10,
-		Reason:    "maximum amendment rounds reached",
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	var output strings.Builder
-	id, err := prepareContinue(ws, "F002", &output)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if id != feature.ID {
-		t.Fatalf("feature ID = %q", id)
-	}
-	current, err := ws.ReadState(feature.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if current.Phase != model.PhaseCode || current.Role != model.RoleCoder || current.Round != 5 {
-		t.Fatalf("state = %+v", current)
-	}
-	if current.Reason != "" || !current.Active {
-		t.Fatalf("state metadata = %+v", current)
-	}
-	if !strings.Contains(output.String(), "Continuing failed round 3 in coding round 5") {
-		t.Fatalf("output = %q", output.String())
-	}
-}
-
-func TestPrepareContinueUsesSanctionedTransition(t *testing.T) {
-	ws := initializedWorkspace(t)
-	feature := model.Feature{ID: "F002-test", Title: "Test", Status: "todo"}
-	if err := ws.SaveFeature(feature); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Join(ws.RuntimeDir(feature.ID), "rounds", "round-4"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	reportPath := filepath.Join(ws.RuntimeDir(feature.ID), "rounds", "round-4", "test-report.md")
-	if err := os.WriteFile(reportPath, []byte("## Verdict\nFAIL"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := ws.WriteState(model.State{
-		FeatureID: feature.ID,
-		Phase:     model.PhaseAttention,
-		Round:     5,
-		MaxRounds: 4,
-		Reason:    "maximum amendment rounds reached",
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	if _, err := prepareContinue(ws, feature.ID, io.Discard); err != nil {
-		t.Fatal(err)
-	}
-	current, err := ws.ReadState(feature.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if current.Phase != model.PhaseCode || current.Role != model.RoleCoder || current.Round != 5 || current.MaxRounds != 4 {
-		t.Fatalf("state = %+v", current)
-	}
-}
-
-func TestPrepareContinueRequiresFailedReport(t *testing.T) {
-	ws := initializedWorkspace(t)
-	feature := model.Feature{ID: "F002-test", Title: "Test", Status: "todo"}
-	if err := ws.SaveFeature(feature); err != nil {
-		t.Fatal(err)
-	}
-	if err := ws.WriteState(model.State{
-		FeatureID: feature.ID,
-		Phase:     model.PhaseAttention,
-		Round:     3,
-		MaxRounds: 3,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := prepareContinue(ws, feature.ID, io.Discard); err == nil {
-		t.Fatal("expected missing failed report error")
-	}
-}
-
 func TestFrameworkDocumentation(t *testing.T) {
 	required := []string{
 		"project.framework", "--framework",
@@ -347,6 +239,16 @@ func TestFrameworkDocumentation(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestProjectWorkflowSkillRolesIncludePlanner(t *testing.T) {
+	roles, err := parseSkillRoles("planner,coder,reviewer,tester")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := strings.Join(roles, ","), "planner,coder,reviewer,tester"; got != want {
+		t.Fatalf("roles = %q, want %q", got, want)
 	}
 }
 

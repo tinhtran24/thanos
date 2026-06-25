@@ -1,4 +1,4 @@
-// Package chat renders the live phase/round agent activity as a chat log: each
+// Package chat renders live workflow activity as a chat log: each
 // role is a colored "speaker" bubble. It supports keyboard selection of bubbles
 // and copying their text. It mirrors crush's internal/ui/chat.
 package chat
@@ -303,7 +303,7 @@ func contentWidth(width int) int {
 	if width < 12 {
 		return 12
 	}
-	return width
+	return min(width, 120)
 }
 
 // PhaseHeader renders a flow band for the current phase above the log.

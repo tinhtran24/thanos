@@ -10,18 +10,18 @@ import (
 var transitions = map[model.Phase][]model.Phase{
 	model.PhaseInit:     {model.PhasePlan, model.PhaseCode},
 	model.PhasePlan:     {model.PhaseCode},
-	model.PhaseCode:     {model.PhaseTest},
-	model.PhaseAmend:    {model.PhaseTest},
-	model.PhaseTest:     {model.PhaseCode, model.PhaseAmend, model.PhaseOverview},
-	model.PhaseOverview: {model.PhasePending},
+	model.PhaseCode:     {model.PhaseReview},
+	model.PhaseReview:   {model.PhaseCode, model.PhaseTest},
+	model.PhaseTest:     {model.PhaseCode, model.PhaseOverview},
+	model.PhaseOverview: {model.PhaseDone, model.PhasePending},
 	model.PhasePending:  {model.PhaseDone},
 
 	// Legacy transitions remain valid so sessions created by older versions can
 	// be resumed and moved into the simplified workflow.
 	model.PhaseDesign:       {model.PhaseDesignReview, model.PhaseCode},
 	model.PhaseDesignReview: {model.PhaseCode, model.PhaseDesign},
-	model.PhaseReview:       {model.PhaseCode, model.PhaseTest, model.PhaseAmend},
-	model.PhaseDeepReview:   {model.PhaseOverview, model.PhaseAccept, model.PhaseCode, model.PhaseAmend},
+	model.PhaseAmend:        {model.PhaseReview, model.PhaseTest},
+	model.PhaseDeepReview:   {model.PhaseOverview, model.PhaseAccept, model.PhaseCode},
 	model.PhaseAccept:       {model.PhasePending},
 	model.PhaseBlocked:      {model.PhasePlan, model.PhaseCode, model.PhaseTest, model.PhaseOverview},
 	model.PhaseAttention:    {model.PhasePlan, model.PhaseCode},
@@ -46,18 +46,6 @@ func Transition(current model.State, to model.Phase) (model.State, error) {
 	if !CanTransition(current.Phase, to) {
 		return current, fmt.Errorf("invalid transition %s -> %s", current.Phase, to)
 	}
-	if to == model.PhaseAmend {
-		current.Round++
-		if current.MaxRounds > 0 && current.Round > current.MaxRounds {
-			to = model.PhaseAttention
-			current.Reason = "maximum amendment rounds reached"
-		}
-	}
-	// The orchestrator resets Round before starting a new EC. Other entries into
-	// Code (legacy migration and continue) preserve the current retry round.
-	if to == model.PhaseCode && current.Round == 0 {
-		current.Round = 1
-	}
 	current.Phase = to
 	if to != model.PhaseBlocked && to != model.PhaseAttention {
 		current.Role = RoleForPhase(to)
@@ -67,17 +55,18 @@ func Transition(current model.State, to model.Phase) (model.State, error) {
 	return current, nil
 }
 
-func ResumeFailedRound(current model.State, round int) (model.State, error) {
-	if current.Phase != model.PhaseAttention {
-		return current, fmt.Errorf("cannot continue %s from %s", current.FeatureID, current.Phase)
+// Complete applies the final workflow state after external evidence validation.
+// It is used by the manual recovery command for ready-for-review or legacy
+// pending-review tickets.
+func Complete(current model.State) (model.State, error) {
+	switch current.Phase {
+	case model.PhaseReview, model.PhaseTest, model.PhaseOverview, model.PhasePending, model.PhaseDone:
+	default:
+		return current, fmt.Errorf("cannot complete %s from %s", current.FeatureID, current.Phase)
 	}
-	if round < 1 || round > current.Round {
-		return current, fmt.Errorf("invalid failed round %d for current round %d", round, current.Round)
-	}
-	current.Phase = model.PhaseAmend
-	current.Role = model.RoleCoder
-	current.Round = round
-	current.Active = true
+	current.Phase = model.PhaseDone
+	current.Role = ""
+	current.Active = false
 	current.Reason = ""
 	current.UpdatedAt = time.Now().UTC()
 	return current, nil
