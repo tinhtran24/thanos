@@ -5,18 +5,19 @@ package styles
 
 import "charm.land/lipgloss/v2"
 
-// Core palette. These are the interactive-TUI colors (distinct from the plain
-// CLI output palette in internal/ui).
+// Core palette. These mirror cli-sample's (Agenvoy) TUI palette — ANSI-256
+// colors: sky-blue accent, gray hints, purple warnings, green success, red
+// errors — so the interactive TUI matches the cli-sample layout style.
 var (
-	Accent    = lipgloss.Color("#B48EFA")
-	AccentDim = lipgloss.Color("#6E56A8")
-	Text      = lipgloss.Color("#E8E3F0")
-	Muted     = lipgloss.Color("#8B8498")
-	Subtle    = lipgloss.Color("#2B2731")
-	Success   = lipgloss.Color("#7FC8A9")
-	Warning   = lipgloss.Color("#E7B86B")
-	Danger    = lipgloss.Color("#E07A8D")
-	Info      = lipgloss.Color("#6FB3D9")
+	Accent    = lipgloss.Color("75")  // sky blue (cli-sample colSystem)
+	AccentDim = lipgloss.Color("67")  // dim blue
+	Text      = lipgloss.Color("15")  // white
+	Muted     = lipgloss.Color("243") // gray (cli-sample colHint)
+	Subtle    = lipgloss.Color("238") // dark gray border
+	Success   = lipgloss.Color("114") // green (cli-sample colOk)
+	Warning   = lipgloss.Color("141") // purple (cli-sample colWarn)
+	Danger    = lipgloss.Color("203") // red (cli-sample colError)
+	Info      = lipgloss.Color("75")  // sky blue
 )
 
 // Frequently used text styles.

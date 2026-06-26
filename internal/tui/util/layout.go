@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // JoinWithGap interleaves columns with gap spaces of horizontal padding.
@@ -22,8 +23,8 @@ func JoinWithGap(columns []string, gap int) []string {
 }
 
 // Overlay composites fg centered over bg, replacing the background cells that fg
-// covers. It is a line-based compositor (no true alpha) good enough for opaque
-// modal dialogs over a static page.
+// covers. It is ANSI-aware (via x/ansi) so colored backgrounds composite cleanly
+// without the foreground bleeding into the page or vice-versa — opaque modals.
 func Overlay(bg, fg string, totalWidth, totalHeight int) string {
 	fgLines := strings.Split(fg, "\n")
 	fgHeight := len(fgLines)
@@ -49,56 +50,19 @@ func Overlay(bg, fg string, totalWidth, totalHeight int) string {
 		if row < 0 || row >= len(bgLines) {
 			continue
 		}
+		// Pad the foreground line to the full overlay width so it fully covers
+		// (opaquely) the background cells beneath it.
+		if w := ansi.StringWidth(fgLine); w < fgWidth {
+			fgLine += strings.Repeat(" ", fgWidth-w)
+		}
 		bgLine := bgLines[row]
-		bgw := lipgloss.Width(bgLine)
-		// Right-pad the background line so the overlay sits at a stable column.
-		if bgw < left {
-			bgLine += strings.Repeat(" ", left-bgw)
-			bgw = left
+		leftPart := ansi.Truncate(bgLine, left, "")
+		if w := ansi.StringWidth(leftPart); w < left {
+			leftPart += strings.Repeat(" ", left-w)
 		}
-		leftPart := truncateANSIWidth(bgLine, left)
-		rightStart := left + fgWidth
-		rightPart := ""
-		if bgw > rightStart {
-			rightPart = strings.Repeat(" ", 0) + cutANSIWidth(bgLine, rightStart)
-		}
-		bgLines[row] = leftPart + fgLine + rightPart
+		rightPart := ansi.TruncateLeft(bgLine, left+fgWidth, "")
+		// Reset SGR on both sides so neither layer's colors leak into the other.
+		bgLines[row] = leftPart + "\x1b[0m" + fgLine + "\x1b[0m" + rightPart
 	}
 	return strings.Join(bgLines, "\n")
-}
-
-// truncateANSIWidth returns the prefix of s up to width display cells, padding
-// with spaces if s is shorter.
-func truncateANSIWidth(s string, width int) string {
-	if lipgloss.Width(s) >= width {
-		return cutANSIWidthPrefix(s, width)
-	}
-	return s + strings.Repeat(" ", width-lipgloss.Width(s))
-}
-
-// cutANSIWidthPrefix returns the leading display-width cells of s. It is a simple
-// rune-based cut; styled background lines in this app are plain enough for it.
-func cutANSIWidthPrefix(s string, width int) string {
-	var b strings.Builder
-	w := 0
-	for _, r := range s {
-		if w >= width {
-			break
-		}
-		b.WriteRune(r)
-		w += lipgloss.Width(string(r))
-	}
-	return b.String()
-}
-
-// cutANSIWidth returns the suffix of s starting at display column start.
-func cutANSIWidth(s string, start int) string {
-	w := 0
-	for i, r := range s {
-		if w >= start {
-			return s[i:]
-		}
-		w += lipgloss.Width(string(r))
-	}
-	return ""
 }

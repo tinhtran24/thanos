@@ -47,7 +47,10 @@ func TestViewRendersSessionFlowAndCapabilities(t *testing.T) {
 	}
 	ui.Update(tea.WindowSizeMsg{Width: 140, Height: 40})
 	view := ui.View().Content
-	for _, want := range []string{"THANOS", "Session UI", "CODE INTELLIGENCE", "LSP · go", "MCP · github"} {
+	// cli-sample single-column layout: the rounded header block carries the
+	// Thanos logo and a project/runner/feature status grid; the feature title
+	// shows in the conversation header.
+	for _, want := range []string{"Thanos", "Session UI", "codex", "F001-session-ui"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view does not contain %q:\n%s", want, view)
 		}
@@ -120,23 +123,9 @@ func TestArrowKeysMoveSessionSelection(t *testing.T) {
 	if ui.cursor != 1 {
 		t.Fatalf("cursor = %d after numeric selection, want 1", ui.cursor)
 	}
-	// Clicking a feature row in the right sidebar selects it. Render once so the
-	// tree row geometry is known, then click the first feature-0 row.
-	ui.Update(tea.WindowSizeMsg{Width: 140, Height: 40})
-	_ = ui.View()
-	row0 := -1
-	for i, r := range ui.treeRows {
-		if r.FeatureIndex == 0 {
-			row0 = i
-			break
-		}
-	}
-	if row0 < 0 {
-		t.Fatal("no feature-0 row in the sidebar tree")
-	}
-	ui.Update(tea.MouseClickMsg{X: ui.sidebarX0, Y: ui.treeY0 + row0, Button: tea.MouseLeft})
+	ui.Update(tea.KeyPressMsg{Code: '1', Text: "1"})
 	if ui.cursor != 0 {
-		t.Fatalf("cursor = %d after sidebar click, want 0", ui.cursor)
+		t.Fatalf("cursor = %d after numeric selection, want 0", ui.cursor)
 	}
 }
 
