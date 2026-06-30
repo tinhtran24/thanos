@@ -34,12 +34,26 @@ func (w *Workspace) Init(config model.Config) error {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	for _, dir := range []string{w.DotDir(), filepath.Join(w.DotDir(), "features"), filepath.Join(w.DotDir(), "prompts")} {
+	for _, dir := range []string{
+		w.DotDir(),
+		filepath.Join(w.DotDir(), "features"),
+		filepath.Join(w.DotDir(), "prompts"),
+		filepath.Join(w.DotDir(), "tasks"),
+		filepath.Join(w.DotDir(), "plans"),
+		filepath.Join(w.DotDir(), "logs"),
+		filepath.Join(w.DotDir(), "reviews"),
+		filepath.Join(w.DotDir(), "tests"),
+		filepath.Join(w.DotDir(), "worktrees"),
+		filepath.Join(w.DotDir(), "plan-graph", "features"),
+	} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return err
 		}
 	}
-	return writeJSON(w.ConfigPath(), config)
+	if err := writeJSON(w.ConfigPath(), config); err != nil {
+		return err
+	}
+	return w.WriteAgents(defaultAgents())
 }
 
 func (w *Workspace) ConfigPath() string { return filepath.Join(w.DotDir(), "settings.json") }
@@ -58,6 +72,176 @@ func (w *Workspace) WriteConfig(config model.Config) error {
 
 func (w *Workspace) FeaturePath(id string) string {
 	return filepath.Join(w.DotDir(), "features", id+".yaml")
+}
+
+func (w *Workspace) EnsureTaskDirs() error {
+	for _, dir := range []string{"tasks", "plans", "logs", "reviews", "tests", "worktrees", filepath.Join("plan-graph", "features")} {
+		if err := os.MkdirAll(filepath.Join(w.DotDir(), dir), 0o755); err != nil {
+			return err
+		}
+	}
+	if _, err := os.Stat(w.AgentsPath()); errors.Is(err, os.ErrNotExist) {
+		return w.WriteAgents(defaultAgents())
+	} else if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (w *Workspace) AgentsPath() string { return filepath.Join(w.DotDir(), "agents.yaml") }
+
+func (w *Workspace) ReadAgents() (model.AgentsConfig, error) {
+	var config model.AgentsConfig
+	data, err := os.ReadFile(w.AgentsPath())
+	if err != nil {
+		return config, err
+	}
+	if err := yaml.Unmarshal(data, &config); err != nil {
+		return config, fmt.Errorf("%s: %w", w.AgentsPath(), err)
+	}
+	return config, nil
+}
+
+func (w *Workspace) WriteAgents(config model.AgentsConfig) error {
+	data, err := yaml.Marshal(config)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(w.DotDir(), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(w.AgentsPath(), data, 0o644)
+}
+
+func defaultAgents() model.AgentsConfig {
+	return model.AgentsConfig{Agents: []model.AgentProfile{
+		{Name: "codex", Command: "codex", Args: []string{"exec", "--full-auto", "-"}, Role: "implementation", AllowedSteps: []model.TaskStatus{model.TaskAnalysis, model.TaskPlan, model.TaskDev}},
+		{Name: "claude", Command: "claude", Args: []string{"--print", "--dangerously-skip-permissions"}, Role: "implementation", AllowedSteps: []model.TaskStatus{model.TaskAnalysis, model.TaskPlan, model.TaskDev}},
+		{Name: "gemini", Command: "gemini", Role: "implementation", AllowedSteps: []model.TaskStatus{model.TaskAnalysis, model.TaskPlan, model.TaskDev}},
+		{Name: "opencode", Command: "opencode", Role: "implementation", AllowedSteps: []model.TaskStatus{model.TaskAnalysis, model.TaskPlan, model.TaskDev}},
+		{Name: "custom", Command: "", Role: "custom", AllowedSteps: []model.TaskStatus{model.TaskAnalysis, model.TaskPlan, model.TaskDev, model.TaskTest}},
+	}}
+}
+
+func (w *Workspace) TaskPath(id string) string {
+	return filepath.Join(w.DotDir(), "tasks", id+".yaml")
+}
+
+func (w *Workspace) TaskPlanPath(id string) string {
+	return filepath.Join(w.DotDir(), "plans", id+".md")
+}
+
+func (w *Workspace) TaskLogPath(id string) string {
+	return filepath.Join(w.DotDir(), "logs", id+".log")
+}
+
+func (w *Workspace) TaskDiffSummaryPath(id string) string {
+	return filepath.Join(w.DotDir(), "reviews", id+"-diff.md")
+}
+
+func (w *Workspace) TaskTestResultPath(id string) string {
+	return filepath.Join(w.DotDir(), "tests", id+".md")
+}
+
+func (w *Workspace) TaskWorktreePath(id string) string {
+	return filepath.Join(w.DotDir(), "worktrees", id)
+}
+
+func (w *Workspace) PlanGraphFeaturePath(name string) string {
+	return filepath.Join(w.DotDir(), "plan-graph", "features", slugify(name)+".md")
+}
+
+func (w *Workspace) SaveTask(task model.Task) error {
+	if err := w.EnsureTaskDirs(); err != nil {
+		return err
+	}
+	data, err := yaml.Marshal(task)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(w.TaskPath(task.ID), data, 0o644)
+}
+
+func (w *Workspace) LoadTask(id string) (model.Task, error) {
+	var task model.Task
+	path, err := w.resolveTaskPath(id)
+	if err != nil {
+		return task, err
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return task, err
+	}
+	if err := yaml.Unmarshal(data, &task); err != nil {
+		return task, fmt.Errorf("%s: %w", path, err)
+	}
+	return task, nil
+}
+
+func (w *Workspace) ListTasks() ([]model.Task, error) {
+	if err := w.EnsureTaskDirs(); err != nil {
+		return nil, err
+	}
+	paths, err := filepath.Glob(filepath.Join(w.DotDir(), "tasks", "*.yaml"))
+	if err != nil {
+		return nil, err
+	}
+	tasks := make([]model.Task, 0, len(paths))
+	for _, path := range paths {
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return nil, readErr
+		}
+		var task model.Task
+		if err := yaml.Unmarshal(data, &task); err != nil {
+			return nil, fmt.Errorf("%s: %w", path, err)
+		}
+		tasks = append(tasks, task)
+	}
+	sort.Slice(tasks, func(i, j int) bool { return tasks[i].ID < tasks[j].ID })
+	return tasks, nil
+}
+
+func (w *Workspace) NextTaskID(title string) (string, error) {
+	tasks, err := w.ListTasks()
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("T%03d-%s", len(tasks)+1, slugify(title)), nil
+}
+
+func (w *Workspace) NewTask(title, description, priority, agent, parent string) (model.Task, error) {
+	id, err := w.NextTaskID(title)
+	if err != nil {
+		return model.Task{}, err
+	}
+	now := time.Now().UTC()
+	return model.Task{
+		ID: id, Title: title, Description: description, Status: model.TaskBacklog,
+		Priority: priority, ParentTaskID: parent, AssignedAgent: agent,
+		CreatedAt: now, UpdatedAt: now,
+		PlanPath:        filepath.ToSlash(filepath.Join(".thanos", "plans", id+".md")),
+		LogPath:         filepath.ToSlash(filepath.Join(".thanos", "logs", id+".log")),
+		DiffSummaryPath: filepath.ToSlash(filepath.Join(".thanos", "reviews", id+"-diff.md")),
+		TestResultPath:  filepath.ToSlash(filepath.Join(".thanos", "tests", id+".md")),
+		WorktreePath:    filepath.ToSlash(filepath.Join(".thanos", "worktrees", id)),
+		BranchName:      "thanos/" + id + "-" + slugify(title),
+	}, nil
+}
+
+func (w *Workspace) resolveTaskPath(id string) (string, error) {
+	exact := w.TaskPath(id)
+	if _, err := os.Stat(exact); err == nil {
+		return exact, nil
+	}
+	matches, err := filepath.Glob(filepath.Join(w.DotDir(), "tasks", id+"*.yaml"))
+	if err != nil {
+		return "", err
+	}
+	if len(matches) != 1 {
+		return "", fmt.Errorf("task %q not found or ambiguous", id)
+	}
+	return matches[0], nil
 }
 
 func (w *Workspace) SaveFeature(feature model.Feature) error {
