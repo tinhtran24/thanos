@@ -7,14 +7,12 @@ import (
 	"github.com/tinhtran/thanos/internal/model"
 )
 
-func TestTaskTransitionsFollowReviewFirstWorkflow(t *testing.T) {
+func TestTaskTransitionsFollowTokenEfficientWorkflow(t *testing.T) {
 	task := model.Task{ID: "T001-demo", Status: model.TaskBacklog, PlanPath: ".thanos/plans/T001-demo.md"}
 	for _, status := range []model.TaskStatus{
-		model.TaskAnalysis,
 		model.TaskPlan,
-		model.TaskDev,
-		model.TaskReview,
-		model.TaskTest,
+		model.TaskExecute,
+		model.TaskVerify,
 	} {
 		next, err := Transition(task, status)
 		if err != nil {
@@ -30,7 +28,7 @@ func TestTaskTransitionsFollowReviewFirstWorkflow(t *testing.T) {
 }
 
 func TestTaskDoneRequiresReviewAndTests(t *testing.T) {
-	task := model.Task{ID: "T001-demo", Status: model.TaskTest}
+	task := model.Task{ID: "T001-demo", Status: model.TaskVerify}
 	if _, err := Transition(task, model.TaskDone); err == nil || !strings.Contains(err.Error(), "review") {
 		t.Fatalf("expected review gate error, got %v", err)
 	}
@@ -40,16 +38,16 @@ func TestTaskDoneRequiresReviewAndTests(t *testing.T) {
 	}
 }
 
-func TestTaskDevRequiresPlan(t *testing.T) {
+func TestTaskExecuteRequiresPlan(t *testing.T) {
 	task := model.Task{ID: "T001-demo", Status: model.TaskPlan}
-	if _, err := Transition(task, model.TaskDev); err == nil || !strings.Contains(err.Error(), "plan") {
+	if _, err := Transition(task, model.TaskExecute); err == nil || !strings.Contains(err.Error(), "plan") {
 		t.Fatalf("expected plan gate error, got %v", err)
 	}
 }
 
-func TestTaskCannotSkipFromBacklogToDev(t *testing.T) {
+func TestTaskCannotSkipFromBacklogToExecute(t *testing.T) {
 	task := model.Task{ID: "T001-demo", Status: model.TaskBacklog, PlanPath: ".thanos/plans/T001-demo.md"}
-	if _, err := Transition(task, model.TaskDev); err == nil || !strings.Contains(err.Error(), "invalid") {
+	if _, err := Transition(task, model.TaskExecute); err == nil || !strings.Contains(err.Error(), "invalid") {
 		t.Fatalf("expected invalid transition error, got %v", err)
 	}
 }

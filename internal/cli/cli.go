@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -359,8 +360,7 @@ func runBoard(ws *workspace.Workspace, stdout io.Writer) error {
 		return nil
 	}
 	order := []model.TaskStatus{
-		model.TaskBacklog, model.TaskAnalysis, model.TaskPlan, model.TaskDev,
-		model.TaskReview, model.TaskTest, model.TaskDone,
+		model.TaskBacklog, model.TaskPlan, model.TaskExecute, model.TaskVerify, model.TaskDone,
 	}
 	byStatus := map[model.TaskStatus][]model.Task{}
 	for _, task := range tasks {
@@ -387,28 +387,74 @@ func runBoard(ws *workspace.Workspace, stdout io.Writer) error {
 
 func runTask(ctx context.Context, ws *workspace.Workspace, args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("usage: thanos task create|split|plan|run|review|test|done|reopen")
+		return errors.New("usage: thanos task create|split|plan|execute|verify|done|reopen")
 	}
 	switch args[0] {
+	case "list":
+		return runTaskList(ws, args[1:], stdout)
+	case "show":
+		return runTaskShow(ws, args[1:], stdout)
 	case "create":
 		return runTaskCreate(ws, args[1:], stdout)
 	case "split":
 		return runTaskSplit(ws, args[1:], stdout)
 	case "plan":
 		return runTaskPlan(ws, args[1:], stdout)
-	case "run":
-		return runTaskRun(ctx, ws, args[1:], stdout, stderr)
-	case "review":
-		return runTaskReview(ws, args[1:], stdout)
-	case "test":
-		return runTaskTest(ctx, ws, args[1:], stdout, stderr)
+	case "execute", "run":
+		return runTaskExecute(ctx, ws, args[1:], stdout, stderr)
+	case "verify", "review", "test":
+		return runTaskVerify(ctx, ws, args[1:], stdout, stderr)
 	case "done":
 		return runTaskDone(ws, args[1:], stdout)
 	case "reopen":
 		return runTaskReopen(ws, args[1:], stdout)
 	default:
-		return errors.New("usage: thanos task create|split|plan|run|review|test|done|reopen")
+		return errors.New("usage: thanos task create|split|plan|execute|verify|done|reopen")
 	}
+}
+
+func runTaskList(ws *workspace.Workspace, args []string, stdout io.Writer) error {
+	if len(args) > 1 || (len(args) == 1 && args[0] != "--json") {
+		return errors.New("usage: thanos task list [--json]")
+	}
+	tasks, err := ws.ListTasks()
+	if err != nil {
+		return err
+	}
+	if len(args) == 1 {
+		return json.NewEncoder(stdout).Encode(tasks)
+	}
+	rows := make([][]string, 0, len(tasks))
+	for _, task := range tasks {
+		rows = append(rows, []string{task.ID, string(task.Status), task.Priority, task.AssignedAgent, task.Title})
+	}
+	ui.Block(stdout, ui.Table([]string{"ID", "STATUS", "PRIORITY", "AGENT", "TITLE"}, rows))
+	return nil
+}
+
+func runTaskShow(ws *workspace.Workspace, args []string, stdout io.Writer) error {
+	if len(args) < 1 || len(args) > 2 || (len(args) == 2 && args[1] != "--json") {
+		return errors.New("usage: thanos task show TASK_ID [--json]")
+	}
+	task, err := ws.LoadTask(args[0])
+	if err != nil {
+		return err
+	}
+	if len(args) == 2 {
+		return json.NewEncoder(stdout).Encode(task)
+	}
+	ui.Block(stdout, ui.Section("Task", []ui.Field{
+		{Label: "id", Value: task.ID},
+		{Label: "status", Value: string(task.Status)},
+		{Label: "priority", Value: task.Priority},
+		{Label: "agent", Value: emptyDash(task.AssignedAgent)},
+		{Label: "plan", Value: task.PlanPath},
+		{Label: "log", Value: task.LogPath},
+		{Label: "review", Value: task.ReviewPath},
+		{Label: "tests", Value: task.TestResultPath},
+		{Label: "title", Value: task.Title},
+	}))
+	return nil
 }
 
 func runTaskCreate(ws *workspace.Workspace, args []string, stdout io.Writer) error {
@@ -466,10 +512,9 @@ func runTaskSplit(ws *workspace.Workspace, args []string, stdout io.Writer) erro
 		description string
 		agentRole   string
 	}{
-		{"QA analysis", "Analyze requirements, edge cases, impacted features, and acceptance criteria before planning.", "qa"},
-		{"Implementation", "Implement the approved plan in an isolated worktree and record changed behavior.", "implementation"},
-		{"Review", "Review the implementation against the plan checklist, diff summary, and risks.", "review"},
-		{"Testing", "Run smoke or unit tests from project configuration and record results.", "testing"},
+		{"Plan", "Understand the task once and produce reusable implementation artifacts.", "planning"},
+		{"Execute", "Implement the saved plan in an isolated worktree and record changed files.", "implementation"},
+		{"Verify", "Review the execution summary and run validation checks.", "verification"},
 	}
 	for _, tmpl := range templates {
 		child, err := ws.NewTask(parent.Title+" - "+tmpl.suffix, tmpl.description+"\n\nParent: "+parent.ID+"\n"+parent.Description, parent.Priority, agentForRole(ws, tmpl.agentRole), parent.ID)
@@ -495,15 +540,20 @@ func runTaskPlan(ws *workspace.Workspace, args []string, stdout io.Writer) error
 		return err
 	}
 	if task.Status == model.TaskBacklog {
-		if task, err = taskworkflow.Transition(task, model.TaskAnalysis); err != nil {
-			return err
-		}
-		writeTaskLog(ws, task, qaAnalysisPrompt(task))
-	}
-	if task.Status == model.TaskAnalysis {
 		if task, err = taskworkflow.Transition(task, model.TaskPlan); err != nil {
 			return err
 		}
+	}
+	if _, err := os.Stat(ws.TaskPlanPath(task.ID)); err == nil {
+		task.PlanPath = filepath.ToSlash(filepath.Join(".thanos", "plans", task.ID+".md"))
+		task.UpdatedAt = time.Now().UTC()
+		if saveErr := ws.SaveTask(task); saveErr != nil {
+			return saveErr
+		}
+		printTaskStatus(stdout, task, "Plan already exists; reused saved plan")
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
 	}
 	memory := relatedFeatureMemory(ws, task)
 	plan := renderTaskPlan(task, memory)
@@ -523,19 +573,19 @@ func runTaskPlan(ws *workspace.Workspace, args []string, stdout io.Writer) error
 	return nil
 }
 
-func runTaskRun(ctx context.Context, ws *workspace.Workspace, args []string, stdout, stderr io.Writer) error {
+func runTaskExecute(ctx context.Context, ws *workspace.Workspace, args []string, stdout, stderr io.Writer) error {
 	if len(args) != 1 {
-		return errors.New("usage: thanos task run TASK_ID")
+		return errors.New("usage: thanos task execute TASK_ID")
 	}
 	task, err := ws.LoadTask(args[0])
 	if err != nil {
 		return err
 	}
 	if _, err := os.Stat(ws.TaskPlanPath(task.ID)); err != nil {
-		return fmt.Errorf("plan is required before Dev: run 'thanos task plan %s'", task.ID)
+		return fmt.Errorf("plan is required before Execute: run 'thanos task plan %s'", task.ID)
 	}
-	if task.Status != model.TaskDev {
-		task, err = taskworkflow.Transition(task, model.TaskDev)
+	if task.Status != model.TaskExecute {
+		task, err = taskworkflow.Transition(task, model.TaskExecute)
 		if err != nil {
 			return err
 		}
@@ -548,23 +598,23 @@ func runTaskRun(ctx context.Context, ws *workspace.Workspace, args []string, std
 		_ = ws.SaveTask(task)
 		return err
 	}
-	if err := writeDiffSummary(ctx, ws, task); err != nil {
+	if err := writeExecutionSummary(ctx, ws, task); err != nil {
 		return err
 	}
-	task, err = taskworkflow.Transition(task, model.TaskReview)
+	task, err = taskworkflow.Transition(task, model.TaskVerify)
 	if err != nil {
 		return err
 	}
 	if err := ws.SaveTask(task); err != nil {
 		return err
 	}
-	printTaskStatus(stdout, task, "Paused at Review")
-	return runTaskReview(ws, []string{task.ID}, stdout)
+	printTaskStatus(stdout, task, "Paused at Verify")
+	return printTaskVerifyGate(ws, task, stdout)
 }
 
-func runTaskReview(ws *workspace.Workspace, args []string, stdout io.Writer) error {
+func runTaskVerify(ctx context.Context, ws *workspace.Workspace, args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("usage: thanos task review TASK_ID [approve|request-changes|rerun-agent|reopen-plan]")
+		return errors.New("usage: thanos task verify TASK_ID [approve|request-changes|rerun-agent|reopen-plan]")
 	}
 	task, err := ws.LoadTask(args[0])
 	if err != nil {
@@ -580,7 +630,7 @@ func runTaskReview(ws *workspace.Workspace, args []string, stdout io.Writer) err
 			}
 		case "request-changes", "rerun-agent":
 			task.ReviewApproved = false
-			task, err = taskworkflow.Transition(task, model.TaskDev)
+			task, err = taskworkflow.Transition(task, model.TaskExecute)
 			if err != nil {
 				return err
 			}
@@ -597,16 +647,49 @@ func runTaskReview(ws *workspace.Workspace, args []string, stdout io.Writer) err
 				return err
 			}
 		default:
-			return errors.New("usage: thanos task review TASK_ID [approve|request-changes|rerun-agent|reopen-plan]")
+			return errors.New("usage: thanos task verify TASK_ID [approve|request-changes|rerun-agent|reopen-plan]")
+		}
+		return printTaskVerifyGate(ws, task, stdout)
+	}
+	if task.Status == model.TaskExecute {
+		task, err = taskworkflow.Transition(task, model.TaskVerify)
+		if err != nil {
+			return err
+		}
+		if err := ws.SaveTask(task); err != nil {
+			return err
 		}
 	}
+	if err := writeReviewReport(ws, task); err != nil {
+		return err
+	}
+	if err := runTaskTests(ctx, ws, task, stdout, stderr); err != nil {
+		task.TestsPassed = false
+		task.UpdatedAt = time.Now().UTC()
+		_ = ws.SaveTask(task)
+		return err
+	}
+	task.TestsPassed = true
+	task.UpdatedAt = time.Now().UTC()
+	if err := ws.SaveTask(task); err != nil {
+		return err
+	}
+	return printTaskVerifyGate(ws, task, stdout)
+}
+
+func printTaskVerifyGate(ws *workspace.Workspace, task model.Task, stdout io.Writer) error {
 	printTaskStatus(stdout, task, "Review gate")
-	ui.Block(stdout, ui.Section("Plan Checklist", []ui.Field{{Label: "plan", Value: task.PlanPath}, {Label: "approved", Value: fmt.Sprint(task.ReviewApproved)}}))
+	ui.Block(stdout, ui.Section("Plan Checklist", []ui.Field{{Label: "plan", Value: task.PlanPath}, {Label: "approved", Value: fmt.Sprint(task.ReviewApproved)}, {Label: "tests", Value: fmt.Sprint(task.TestsPassed)}}))
 	ui.Block(stdout, ui.Section("Changed Files", []ui.Field{{Label: "worktree", Value: task.WorktreePath}}))
-	if summary, err := os.ReadFile(ws.TaskDiffSummaryPath(task.ID)); err == nil {
+	if summary, err := os.ReadFile(ws.TaskLogPath(task.ID)); err == nil {
 		ui.Raw(stdout, string(summary))
 	} else {
-		ui.Info(stdout, "No diff summary yet.")
+		ui.Info(stdout, "No execution summary yet.")
+	}
+	if review, err := os.ReadFile(ws.TaskReviewPath(task.ID)); err == nil {
+		ui.Raw(stdout, string(review))
+	} else {
+		ui.Info(stdout, "No review result yet.")
 	}
 	if tests, err := os.ReadFile(ws.TaskTestResultPath(task.ID)); err == nil {
 		ui.Raw(stdout, string(tests))
@@ -614,28 +697,15 @@ func runTaskReview(ws *workspace.Workspace, args []string, stdout io.Writer) err
 		ui.Info(stdout, "No test result yet.")
 	}
 	ui.Block(stdout, ui.Table([]string{"ACTION", "COMMAND"}, [][]string{
-		{"approve", "thanos task review " + task.ID + " approve"},
-		{"request changes", "thanos task review " + task.ID + " request-changes"},
-		{"rerun agent", "thanos task review " + task.ID + " rerun-agent"},
-		{"reopen plan", "thanos task review " + task.ID + " reopen-plan"},
+		{"approve", "thanos task verify " + task.ID + " approve"},
+		{"request changes", "thanos task verify " + task.ID + " request-changes"},
+		{"rerun agent", "thanos task verify " + task.ID + " rerun-agent"},
+		{"reopen plan", "thanos task verify " + task.ID + " reopen-plan"},
 	}))
 	return nil
 }
 
-func runTaskTest(ctx context.Context, ws *workspace.Workspace, args []string, stdout, stderr io.Writer) error {
-	if len(args) != 1 {
-		return errors.New("usage: thanos task test TASK_ID")
-	}
-	task, err := ws.LoadTask(args[0])
-	if err != nil {
-		return err
-	}
-	if task.Status == model.TaskReview {
-		task, err = taskworkflow.Transition(task, model.TaskTest)
-		if err != nil {
-			return err
-		}
-	}
+func runTaskTests(ctx context.Context, ws *workspace.Workspace, task model.Task, stdout, stderr io.Writer) error {
 	config, err := ws.ReadConfig()
 	if err != nil {
 		return err
@@ -667,13 +737,7 @@ func runTaskTest(ctx context.Context, ws *workspace.Workspace, args []string, st
 	if err := os.WriteFile(ws.TaskTestResultPath(task.ID), []byte(report.String()), 0o644); err != nil {
 		return err
 	}
-	task.TestsPassed = passed
-	task.UpdatedAt = time.Now().UTC()
-	if err := ws.SaveTask(task); err != nil {
-		return err
-	}
 	if passed {
-		printTaskStatus(stdout, task, "Tests passed")
 		return nil
 	}
 	printTaskStatus(stderr, task, "Tests failed")
@@ -688,14 +752,11 @@ func runTaskDone(ws *workspace.Workspace, args []string, stdout io.Writer) error
 	if err != nil {
 		return err
 	}
-	if task.Status != model.TaskTest {
-		return fmt.Errorf("task %s must be in Test before Done", task.ID)
+	if task.Status != model.TaskVerify {
+		return fmt.Errorf("task %s must be in Verify before Done", task.ID)
 	}
 	task, err = taskworkflow.Transition(task, model.TaskDone)
 	if err != nil {
-		return err
-	}
-	if err := updateTaskFeatureMemory(ws, task); err != nil {
 		return err
 	}
 	if err := ws.SaveTask(task); err != nil {
@@ -735,20 +796,6 @@ func printTaskStatus(stdout io.Writer, task model.Task, message string) {
 	}))
 }
 
-func qaAnalysisPrompt(task model.Task) string {
-	return strings.TrimSpace(fmt.Sprintf(`# QA analysis prompt
-
-Task: %s
-Title: %s
-Priority: %s
-
-Description:
-%s
-
-Analyze requirements, ambiguities, impacted behavior, risks, and acceptance evidence. Do not edit project source files during Analysis.
-`, task.ID, task.Title, task.Priority, task.Description)) + "\n"
-}
-
 func renderTaskPlan(task model.Task, memory string) string {
 	if strings.TrimSpace(memory) == "" {
 		memory = "No related feature memory found."
@@ -758,17 +805,21 @@ func renderTaskPlan(task model.Task, memory string) string {
 ## Requirement Summary
 %s
 
+## Acceptance Criteria
+- Confirm the implementation satisfies the task request.
+- Keep review and test evidence under .thanos/.
+
 ## Related Feature Memory
 %s
 
-## Impacted Files
-- TBD by planner or coding agent before implementation.
+## Affected Modules
+- TBD by planner before execution.
 
-## Implementation Steps
+## Task Checklist
 - Confirm assumptions and acceptance criteria.
 - Make the smallest coherent implementation change in the task worktree.
 - Update or add focused tests.
-- Produce a diff summary for review.
+- Produce an execution summary for Verify.
 
 ## Risks
 - Scope may be broader than the initial task description.
@@ -785,9 +836,9 @@ func renderTaskPlan(task model.Task, memory string) string {
 ## Optional Mermaid Diagram
 `+"```mermaid"+`
 flowchart LR
-  Backlog --> Analysis --> Plan --> Dev --> Review --> Test --> Done
-  Review --> Dev
-  Review --> Plan
+  Backlog --> Plan --> Execute --> Verify --> Done
+  Verify --> Execute
+  Verify --> Plan
 `+"```"+`
 `, task.Title, task.Description, memory)) + "\n"
 }
@@ -834,7 +885,7 @@ func updateTaskFeatureMemory(ws *workspace.Workspace, task model.Task) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	diffSummary := readOptional(ws.TaskDiffSummaryPath(task.ID))
+	executionSummary := readOptional(ws.TaskLogPath(task.ID))
 	testResult := readOptional(ws.TaskTestResultPath(task.ID))
 	content := fmt.Sprintf(`# %s
 
@@ -856,7 +907,7 @@ Task %s: %s
 
 ## Future Risks
 - Revisit this memory if follow-up review finds regressions.
-`, name, time.Now().UTC().Format(time.RFC3339), task.ID, task.Title, strings.TrimSpace(diffSummary), task.ReviewApproved, task.TestsPassed, strings.TrimSpace(testResult))
+`, name, time.Now().UTC().Format(time.RFC3339), task.ID, task.Title, strings.TrimSpace(executionSummary), task.ReviewApproved, task.TestsPassed, strings.TrimSpace(testResult))
 	return os.WriteFile(path, []byte(content), 0o644)
 }
 
@@ -877,17 +928,17 @@ func ensureTaskWorktree(ctx context.Context, ws *workspace.Workspace, task model
 }
 
 func runTaskAgent(ctx context.Context, ws *workspace.Workspace, task model.Task, stdout, stderr io.Writer) error {
-	profile, ok, err := taskAgent(ws, task, model.TaskDev)
+	profile, ok, err := taskAgent(ws, task, model.TaskExecute)
 	if err != nil {
 		return err
 	}
 	if !ok || profile.Command == "" {
-		writeTaskLog(ws, task, devPrompt(ws, task))
-		ui.Info(stdout, "No executable agent profile configured; wrote Dev prompt to "+task.LogPath)
+		writeTaskLog(ws, task, executePrompt(ws, task))
+		ui.Info(stdout, "No executable agent profile configured; wrote Execute prompt to "+task.LogPath)
 		return nil
 	}
 	worktree := filepath.Join(ws.Root, filepath.FromSlash(task.WorktreePath))
-	prompt := devPrompt(ws, task)
+	prompt := executePrompt(ws, task)
 	commandText := strings.TrimSpace(profile.Command + " " + strings.Join(profile.Args, " "))
 	printExecLog(stdout, ui.ExecLogEntry{Type: "exec", Command: commandText, Workdir: worktree, Status: ui.Running})
 	started := time.Now()
@@ -961,28 +1012,23 @@ func agentForRole(ws *workspace.Workspace, role string) string {
 	return ""
 }
 
-func devPrompt(ws *workspace.Workspace, task model.Task) string {
+func executePrompt(ws *workspace.Workspace, task model.Task) string {
 	plan := readOptional(ws.TaskPlanPath(task.ID))
-	memory := relatedFeatureMemory(ws, task)
-	return strings.TrimSpace(fmt.Sprintf(`# Dev task
+	return strings.TrimSpace(fmt.Sprintf(`# Execute task
 
-Read and follow the approved plan before editing code. Keep all work in this worktree. Do not merge.
+Read and follow only the saved plan before editing code. Do not re-analyze the original ticket. Keep all work in this worktree. Do not merge.
 
 Task: %s
-Title: %s
 Status: %s
 
-Approved plan:
+Saved plan:
 %s
 
-Related feature memory:
-%s
-
-After coding, leave the repository ready for review and tests. Thanos will stop at Review.
-`, task.ID, task.Title, task.Status, plan, memory)) + "\n"
+After execution, leave the repository ready for Verify. Thanos will stop at the human approval gate.
+`, task.ID, task.Status, plan)) + "\n"
 }
 
-func writeDiffSummary(ctx context.Context, ws *workspace.Workspace, task model.Task) error {
+func writeExecutionSummary(ctx context.Context, ws *workspace.Workspace, task model.Task) error {
 	root := filepath.Join(ws.Root, filepath.FromSlash(task.WorktreePath))
 	out, err := exec.CommandContext(ctx, "git", "-C", root, "diff", "--stat").CombinedOutput()
 	if err != nil {
@@ -992,11 +1038,21 @@ func writeDiffSummary(ctx context.Context, ws *workspace.Workspace, task model.T
 	if err != nil {
 		return fmt.Errorf("git diff --name-only: %w: %s", err, strings.TrimSpace(string(files)))
 	}
-	content := fmt.Sprintf("# Diff Summary\n\n## Changed Files\n%s\n\n## Stat\n%s\n\n## Remaining Risks\n- Review implementation against the plan checklist.\n", string(files), string(out))
-	if err := os.MkdirAll(filepath.Dir(ws.TaskDiffSummaryPath(task.ID)), 0o755); err != nil {
+	content := fmt.Sprintf("# Execution Summary\n\n## Changed Files\n%s\n\n## Completed Checklist\n- Review the saved plan checklist manually.\n\n## Diff Stat\n%s\n\n## Execution Notes\n- Verify reads this summary and the saved plan; the original ticket is not needed.\n", string(files), string(out))
+	if err := os.MkdirAll(filepath.Dir(ws.TaskLogPath(task.ID)), 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(ws.TaskDiffSummaryPath(task.ID), []byte(content), 0o644)
+	return os.WriteFile(ws.TaskLogPath(task.ID), []byte(content), 0o644)
+}
+
+func writeReviewReport(ws *workspace.Workspace, task model.Task) error {
+	plan := readOptional(ws.TaskPlanPath(task.ID))
+	execution := readOptional(ws.TaskLogPath(task.ID))
+	content := fmt.Sprintf("# Review\n\n## Inputs\n- Plan: %s\n- Execution summary: %s\n\n## Self Review\n- Verify implementation against the saved plan.\n- Confirm tests, lint, and type checks are recorded when available.\n\n## Remaining Risks\n- Human approval is still required before Done.\n\n## Plan Excerpt\n%s\n\n## Execution Summary\n%s\n", task.PlanPath, task.LogPath, plan, execution)
+	if err := os.MkdirAll(filepath.Dir(ws.TaskReviewPath(task.ID)), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(ws.TaskReviewPath(task.ID), []byte(content), 0o644)
 }
 
 func runShellCommand(ctx context.Context, root, commandText string, stdout, stderr io.Writer, report io.Writer) error {
@@ -2027,11 +2083,12 @@ Usage:
   thanos status
   thanos board
   thanos task create "Task title" [--description TEXT] [--priority P] [--agent NAME]
+  thanos task list [--json]
+  thanos task show TASK_ID [--json]
   thanos task split TASK_ID
   thanos task plan TASK_ID
-  thanos task run TASK_ID
-  thanos task review TASK_ID [approve|request-changes|rerun-agent|reopen-plan]
-  thanos task test TASK_ID
+  thanos task execute TASK_ID
+  thanos task verify TASK_ID [approve|request-changes|rerun-agent|reopen-plan]
   thanos task done TASK_ID
   thanos task reopen TASK_ID
   thanos prompt FEATURE_ID planner|coder|reviewer|tester

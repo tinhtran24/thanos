@@ -8,13 +8,11 @@ import (
 )
 
 var transitions = map[model.TaskStatus][]model.TaskStatus{
-	model.TaskBacklog:  {model.TaskAnalysis, model.TaskPlan},
-	model.TaskAnalysis: {model.TaskPlan},
-	model.TaskPlan:     {model.TaskDev, model.TaskBacklog},
-	model.TaskDev:      {model.TaskReview},
-	model.TaskReview:   {model.TaskDev, model.TaskTest, model.TaskPlan},
-	model.TaskTest:     {model.TaskReview, model.TaskDone, model.TaskDev},
-	model.TaskDone:     {model.TaskBacklog},
+	model.TaskBacklog: {model.TaskPlan},
+	model.TaskPlan:    {model.TaskExecute, model.TaskBacklog},
+	model.TaskExecute: {model.TaskVerify},
+	model.TaskVerify:  {model.TaskExecute, model.TaskPlan, model.TaskDone},
+	model.TaskDone:    {model.TaskBacklog},
 }
 
 func CanTransition(task model.Task, to model.TaskStatus) error {
@@ -31,8 +29,8 @@ func CanTransition(task model.Task, to model.TaskStatus) error {
 	if !allowed {
 		return fmt.Errorf("invalid task transition %s -> %s", task.Status, to)
 	}
-	if to == model.TaskDev && task.PlanPath == "" {
-		return fmt.Errorf("task %s cannot enter Dev without a plan", task.ID)
+	if to == model.TaskExecute && task.PlanPath == "" {
+		return fmt.Errorf("task %s cannot enter Execute without a plan", task.ID)
 	}
 	if to == model.TaskDone {
 		if !task.ReviewApproved {

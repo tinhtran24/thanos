@@ -9,7 +9,7 @@ The desktop UI is a client of the CLI, not a second implementation of the workfl
 - The CLI remains the source of truth.
 - `.thanos/` remains the local project database.
 - The UI calls `thanos` commands in the selected workspace.
-- The UI does not write task YAML, plan files, review files, test results, worktrees, or feature memory directly.
+- The UI does not write task JSON, plan files, review files, test results, worktrees, or feature memory directly.
 - The UI does not add a database for v1.
 - The UI does not auto-merge code.
 - Workflow rules, review gates, and Done gating stay in the Go CLI.
@@ -49,12 +49,13 @@ Examples:
 
 ```text
 thanos board
+thanos task list --json
+thanos task show T001-example --json
 thanos task create "Task title" --description "..."
 thanos task plan T001-example
-thanos task run T001-example
-thanos task review T001-example
-thanos task review T001-example approve
-thanos task test T001-example
+thanos task execute T001-example
+thanos task verify T001-example
+thanos task verify T001-example approve
 thanos task done T001-example
 ```
 
@@ -70,6 +71,16 @@ npm run tauri dev
 ```
 
 Use the workspace field to point at an initialized Thanos project. Use the binary field to point at `thanos` on `PATH` or an absolute path to a local build.
+
+## Workspace And Agents
+
+The desktop app lets the user enter a local workspace path and connect to that workspace. The Tauri backend validates that `.thanos/` exists before running workflow commands.
+
+Agent profile selection is based on CLIs already installed on the current computer. The backend checks `PATH` for known commands such as `codex`, `claude`, `gemini`, and `opencode`, then the UI can write the selected profile to `.thanos/agents.yaml`. New tasks created from the chat command use the selected profile:
+
+```text
+/new Refactor task workflow
+```
 
 ## V1 Non-Goals
 

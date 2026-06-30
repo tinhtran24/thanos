@@ -14,10 +14,10 @@ The CLI owns workflow state and writes all durable artifacts under `.thanos/`.
 
 Important artifacts:
 
-- `.thanos/tasks/{task-id}.yaml`
+- `.thanos/tasks/{task-id}.json`
 - `.thanos/plans/{task-id}.md`
-- `.thanos/logs/{task-id}.log`
-- `.thanos/reviews/{task-id}-diff.md`
+- `.thanos/logs/{task-id}.md`
+- `.thanos/reviews/{task-id}.md`
 - `.thanos/tests/{task-id}.md`
 - `.thanos/worktrees/{task-id}`
 - `.thanos/plan-graph/features/{feature-name}.md`
@@ -39,9 +39,11 @@ Any future event stream should follow these rules:
 When the CLI exposes machine-readable events, use JSON Lines:
 
 ```json
-{"type":"task.status","task_id":"T001-example","status":"Plan","message":"Plan generated"}
+{"type":"task.status","task_id":"T001-example","status":"plan","message":"Plan generated"}
+{"type":"task.status","task_id":"T001-example","status":"execute","message":"Executing saved plan"}
 {"type":"agent.command.started","task_id":"T001-example","command":"codex exec --full-auto -","workdir":".thanos/worktrees/T001-example"}
 {"type":"agent.command.finished","task_id":"T001-example","exit_code":0,"duration_ms":1250}
+{"type":"task.status","task_id":"T001-example","status":"verify","message":"Verify gate"}
 {"type":"review.gate","task_id":"T001-example","actions":["approve","request-changes","rerun-agent","reopen-plan"]}
 {"type":"test.result","task_id":"T001-example","passed":true,"path":".thanos/tests/T001-example.md"}
 ```
@@ -76,8 +78,7 @@ The desktop UI must still call the CLI for:
 - creating tasks;
 - splitting tasks;
 - planning;
-- running Dev;
-- review actions;
-- tests;
+- executing the saved plan;
+- verify actions;
 - Done;
 - reopen.

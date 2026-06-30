@@ -1,88 +1,55 @@
-import { invoke } from "@tauri-apps/api/core";
-import "./styles.css";
-
-type CliResult = {
-  command: string;
-  stdout: string;
-  stderr: string;
-  code: number | null;
+(function polyfill() {
+  const relList = document.createElement("link").relList;
+  if (relList && relList.supports && relList.supports("modulepreload")) {
+    return;
+  }
+  for (const link of document.querySelectorAll('link[rel="modulepreload"]')) {
+    processPreload(link);
+  }
+  new MutationObserver((mutations) => {
+    for (const mutation of mutations) {
+      if (mutation.type !== "childList") {
+        continue;
+      }
+      for (const node of mutation.addedNodes) {
+        if (node.tagName === "LINK" && node.rel === "modulepreload")
+          processPreload(node);
+      }
+    }
+  }).observe(document, { childList: true, subtree: true });
+  function getFetchOpts(link) {
+    const fetchOpts = {};
+    if (link.integrity) fetchOpts.integrity = link.integrity;
+    if (link.referrerPolicy) fetchOpts.referrerPolicy = link.referrerPolicy;
+    if (link.crossOrigin === "use-credentials")
+      fetchOpts.credentials = "include";
+    else if (link.crossOrigin === "anonymous") fetchOpts.credentials = "omit";
+    else fetchOpts.credentials = "same-origin";
+    return fetchOpts;
+  }
+  function processPreload(link) {
+    if (link.ep)
+      return;
+    link.ep = true;
+    const fetchOpts = getFetchOpts(link);
+    fetch(link.href, fetchOpts);
+  }
+})();
+typeof SuppressedError === "function" ? SuppressedError : function(error, suppressed, message) {
+  var e = new Error(message);
+  return e.name = "SuppressedError", e.error = error, e.suppressed = suppressed, e;
 };
-
-type WorkspaceInfo = {
-  path: string;
-  initialized: boolean;
-  init_output?: CliResult | null;
-};
-
-type TaskStatus = "backlog" | "plan" | "execute" | "verify" | "done";
-
-type Task = {
-  id: string;
-  title: string;
-  description?: string;
-  status: TaskStatus | string;
-  priority?: string;
-  parent_task_id?: string;
-  subtasks?: string[];
-  assigned_agent?: string;
-  branch_name?: string;
-  worktree_path?: string;
-  updated_at?: string;
-  plan_path?: string;
-  log_path?: string;
-  review_path?: string;
-  test_result_path?: string;
-  review_approved?: boolean;
-  tests_passed?: boolean;
-};
-
-type ActivityEvent = {
-  time: string;
-  title: string;
-  detail: string;
-  tone: "ok" | "info" | "warn" | "fail";
-};
-
-type AgentCandidate = {
-  name: string;
-  command: string;
-  installed: boolean;
-  path: string | null;
-  default_args: string[];
-  role: string;
-  allowed_steps: string[];
-};
-
-type AgentProfile = {
-  name: string;
-  command: string;
-  args: string[];
-  env: Record<string, string>;
-  role: string;
-  allowed_steps: string[];
-};
-
-const columns: Array<{ id: TaskStatus; title: string; hint: string }> = [
+async function invoke(cmd, args = {}, options) {
+  return window.__TAURI_INTERNALS__.invoke(cmd, args, options);
+}
+const columns = [
   { id: "backlog", title: "Backlog", hint: "" },
   { id: "plan", title: "Plan", hint: "Review" },
   { id: "execute", title: "Execute", hint: "" },
   { id: "verify", title: "Verify", hint: "Review" },
-  { id: "done", title: "Done", hint: "" },
+  { id: "done", title: "Done", hint: "" }
 ];
-
-const state: {
-  tasks: Task[];
-  selectedTaskID: string;
-  activeBottomTab: "activity" | "timeline" | "terminal";
-  activeInspectorTab: "overview" | "plan" | "files" | "logs" | "reviews" | "tests";
-  activity: ActivityEvent[];
-  terminal: string[];
-  agents: AgentCandidate[];
-  profiles: AgentProfile[];
-  selectedAgent: string;
-  busy: boolean;
-  paletteOpen: boolean;
-} = {
+const state = {
   tasks: [],
   selectedTaskID: "",
   activeBottomTab: "activity",
@@ -93,28 +60,22 @@ const state: {
   profiles: [],
   selectedAgent: localStorage.getItem("thanos.agent") ?? "custom",
   busy: false,
-  paletteOpen: false,
+  paletteOpen: false
 };
-
-const app = document.querySelector<HTMLDivElement>("#app");
-
+const app = document.querySelector("#app");
 if (!app) {
   throw new Error("app root missing");
 }
-
 app.innerHTML = renderAppShell();
-
-const workspaceInput = byId<HTMLInputElement>("workspace");
-const binaryInput = byId<HTMLInputElement>("binary");
-const taskInput = byId<HTMLInputElement>("task-id");
-const chatInput = byId<HTMLInputElement>("chat-input");
-const commandInput = byId<HTMLInputElement>("palette-input");
-
+const workspaceInput = byId("workspace");
+const binaryInput = byId("binary");
+const taskInput = byId("task-id");
+const chatInput = byId("chat-input");
+const commandInput = byId("palette-input");
 restoreSettings();
 wireEvents();
 detectAgents();
 renderAll();
-
 function renderAppShell() {
   return `
     <div class="noise"></div>
@@ -135,7 +96,6 @@ function renderAppShell() {
     </div>
   `;
 }
-
 function renderSidebar() {
   const nav = [
     ["dashboard", "Dashboard"],
@@ -146,7 +106,7 @@ function renderSidebar() {
     ["reviews", "Reviews"],
     ["tests", "Tests"],
     ["worktrees", "Worktrees"],
-    ["settings", "Settings"],
+    ["settings", "Settings"]
   ];
   return `
     <aside class="sidebar" aria-label="Thanos navigation">
@@ -196,7 +156,6 @@ function renderSidebar() {
     </aside>
   `;
 }
-
 function renderTopbar() {
   return `
     <header class="topbar">
@@ -221,7 +180,6 @@ function renderTopbar() {
     </header>
   `;
 }
-
 function renderChatBar() {
   return `
     <footer class="chatbar">
@@ -242,7 +200,6 @@ function renderChatBar() {
     </footer>
   `;
 }
-
 function renderCommandPalette() {
   return `
     <div id="command-palette" class="palette" hidden>
@@ -256,7 +213,6 @@ function renderCommandPalette() {
     </div>
   `;
 }
-
 function renderAll() {
   byId("board").innerHTML = renderBoard();
   byId("inspector").innerHTML = renderInspector();
@@ -268,14 +224,12 @@ function renderAll() {
   const workspace = workspaceInput.value.trim();
   byId("workspace-name").textContent = workspace ? basename(workspace) : "Not connected";
 }
-
 function renderAgentProfiles() {
   const agents = state.agents.length ? state.agents : fallbackAgents();
-  return agents
-    .map((agent) => {
-      const configured = state.profiles.some((profile) => profile.name === agent.name);
-      const active = state.selectedAgent === agent.name ? "active" : "";
-      return `
+  return agents.map((agent) => {
+    const configured = state.profiles.some((profile) => profile.name === agent.name);
+    const active = state.selectedAgent === agent.name ? "active" : "";
+    return `
         <div class="agent-row ${active} ${agent.installed ? "installed" : "missing"}">
           <span>${agent.name.slice(0, 1).toUpperCase()}</span>
           <div>
@@ -285,24 +239,18 @@ function renderAgentProfiles() {
           <button data-agent-use="${agent.name}" ${agent.installed || agent.name === "custom" ? "" : "disabled"}>${configured ? "Use" : "Add"}</button>
         </div>
       `;
-    })
-    .join("");
+  }).join("");
 }
-
 function renderAgentSelect() {
-  const select = byId<HTMLSelectElement>("agent-select");
+  const select = byId("agent-select");
   const agents = state.agents.length ? state.agents : fallbackAgents();
-  const names = new Set([...agents.map((agent) => agent.name), ...state.profiles.map((profile) => profile.name), "custom"]);
-  select.innerHTML = Array.from(names)
-    .map((name) => `<option value="${name}" ${name === state.selectedAgent ? "selected" : ""}>${name}</option>`)
-    .join("");
+  const names = /* @__PURE__ */ new Set([...agents.map((agent) => agent.name), ...state.profiles.map((profile) => profile.name), "custom"]);
+  select.innerHTML = Array.from(names).map((name) => `<option value="${name}" ${name === state.selectedAgent ? "selected" : ""}>${name}</option>`).join("");
 }
-
 function renderBoard() {
-  return columns
-    .map((column) => {
-      const tasks = state.tasks.filter((task) => normalizeStatus(task.status) === column.id);
-      return `
+  return columns.map((column) => {
+    const tasks = state.tasks.filter((task) => normalizeStatus(task.status) === column.id);
+    return `
         <section class="workflow-column" aria-label="${column.title}">
           <header class="column-header">
             <div><span class="status-dot ${column.id}"></span><strong>${column.title}</strong>${column.hint ? `<small>${column.hint}</small>` : ""}</div>
@@ -315,11 +263,9 @@ function renderBoard() {
           </div>
         </section>
       `;
-    })
-    .join("");
+  }).join("");
 }
-
-function renderTaskCard(task: Task) {
+function renderTaskCard(task) {
   const selected = selectedTask()?.id === task.id ? "selected" : "";
   const progress = taskProgress(task);
   return `
@@ -340,7 +286,6 @@ function renderTaskCard(task: Task) {
     </article>
   `;
 }
-
 function renderInspector() {
   const task = selectedTask();
   if (!task) {
@@ -352,7 +297,7 @@ function renderInspector() {
       </div>
     `;
   }
-  const tabs = ["overview", "plan", "files", "logs", "reviews", "tests"] as const;
+  const tabs = ["overview", "plan", "files", "logs", "reviews", "tests"];
   return `
     <header class="inspector-header">
       <div class="inspector-toolbar">
@@ -387,8 +332,7 @@ function renderInspector() {
     </section>
   `;
 }
-
-function renderInspectorTab(task: Task) {
+function renderInspectorTab(task) {
   const fields = [
     ["Feature", task.parent_task_id || "Standalone task"],
     ["Branch", task.branch_name || "not assigned"],
@@ -396,7 +340,7 @@ function renderInspectorTab(task: Task) {
     ["Plan", task.plan_path || "not generated"],
     ["Execution log", task.log_path || "not generated"],
     ["Review", task.review_path || "not generated"],
-    ["Tests", task.test_result_path || "not generated"],
+    ["Tests", task.test_result_path || "not generated"]
   ];
   if (state.activeInspectorTab === "overview") {
     return `
@@ -413,13 +357,13 @@ function renderInspectorTab(task: Task) {
     return renderArtifactPanel("Plan summary", task.plan_path, [
       ["Requirement summary", "Loaded from .thanos/plans when the CLI exposes artifact read output."],
       ["Acceptance criteria", "Verify against the saved plan only."],
-      ["Checklist", "Execute consumes this artifact without re-reading the ticket."],
+      ["Checklist", "Execute consumes this artifact without re-reading the ticket."]
     ]);
   }
   if (state.activeInspectorTab === "files") {
     return renderArtifactPanel("Affected files", task.log_path, [
       ["Changed files", "Recorded in the execution summary."],
-      ["Current worktree", task.worktree_path || "not created"],
+      ["Current worktree", task.worktree_path || "not created"]
     ]);
   }
   if (state.activeInspectorTab === "logs") {
@@ -428,16 +372,15 @@ function renderInspectorTab(task: Task) {
   if (state.activeInspectorTab === "reviews") {
     return renderArtifactPanel("Review gate", task.review_path, [
       ["Review approved", String(Boolean(task.review_approved))],
-      ["Human approval", "Required before done."],
+      ["Human approval", "Required before done."]
     ]);
   }
   return renderArtifactPanel("Test state", task.test_result_path, [
     ["Tests passed", String(Boolean(task.tests_passed))],
-    ["Gate", "Done requires passing tests and approved review."],
+    ["Gate", "Done requires passing tests and approved review."]
   ]);
 }
-
-function renderArtifactPanel(title: string, path: string | undefined, rows: string[][]) {
+function renderArtifactPanel(title, path, rows) {
   return `
     <div class="summary-card">
       <h3>${title}</h3>
@@ -448,9 +391,8 @@ function renderArtifactPanel(title: string, path: string | undefined, rows: stri
     </div>
   `;
 }
-
 function renderBottomPanel() {
-  const tabs = ["activity", "timeline", "terminal"] as const;
+  const tabs = ["activity", "timeline", "terminal"];
   return `
     <div class="bottom-tabs">
       ${tabs.map((tab) => `<button class="${state.activeBottomTab === tab ? "active" : ""}" data-bottom-tab="${tab}">${tab}</button>`).join("")}
@@ -462,7 +404,6 @@ function renderBottomPanel() {
     </div>
   `;
 }
-
 function renderActivity() {
   return `
     <div class="activity-list">
@@ -475,9 +416,8 @@ function renderActivity() {
     </div>
   `;
 }
-
-function icon(name: string) {
-  const icons: Record<string, string> = {
+function icon(name) {
+  const icons = {
     dashboard: "⌂",
     kanban: "▦",
     tasks: "✓",
@@ -503,31 +443,26 @@ function icon(name: string) {
     file: "▱",
     send: "➤",
     close: "×",
-    dot: "●",
+    dot: "●"
   };
   return `<span class="ui-icon" aria-hidden="true">${icons[name] || "•"}</span>`;
 }
-
-function titleCase(value: string) {
+function titleCase(value) {
   return value.slice(0, 1).toUpperCase() + value.slice(1);
 }
-
-function statusLabel(task: Task) {
+function statusLabel(task) {
   const status = normalizeStatus(task.status);
   if (status === "plan" || status === "verify") return "review";
   if (status === "execute") return "backend";
   if (status === "done") return "done";
   return "feature";
 }
-
-function commentCount(task: Task) {
+function commentCount(task) {
   return task.review_path ? 2 : task.review_approved ? 1 : 0;
 }
-
-function fileCount(task: Task) {
+function fileCount(task) {
   return [task.plan_path, task.log_path, task.review_path, task.test_result_path].filter(Boolean).length;
 }
-
 function renderTimeline() {
   return `
     <div class="timeline">
@@ -535,11 +470,9 @@ function renderTimeline() {
     </div>
   `;
 }
-
 function renderTerminal() {
   return `<pre class="terminal">${escapeHtml(state.terminal.join("\n\n"))}</pre>`;
 }
-
 function wireEvents() {
   byId("refresh").addEventListener("click", refreshBoard);
   byId("new-task-toggle").addEventListener("click", () => {
@@ -560,43 +493,43 @@ function wireEvents() {
     }
   });
   document.addEventListener("click", (event) => {
-    const target = event.target as HTMLElement;
-    const taskCard = target.closest<HTMLElement>("[data-task-id]");
+    const target = event.target;
+    const taskCard = target.closest("[data-task-id]");
     if (taskCard) {
       state.selectedTaskID = taskCard.dataset.taskId || "";
       taskInput.value = state.selectedTaskID;
       renderAll();
       return;
     }
-    const bottomTab = target.closest<HTMLButtonElement>("[data-bottom-tab]");
+    const bottomTab = target.closest("[data-bottom-tab]");
     if (bottomTab) {
-      state.activeBottomTab = bottomTab.dataset.bottomTab as typeof state.activeBottomTab;
+      state.activeBottomTab = bottomTab.dataset.bottomTab;
       renderAll();
       return;
     }
-    const inspectorTab = target.closest<HTMLButtonElement>("[data-inspector-tab]");
+    const inspectorTab = target.closest("[data-inspector-tab]");
     if (inspectorTab) {
-      state.activeInspectorTab = inspectorTab.dataset.inspectorTab as typeof state.activeInspectorTab;
+      state.activeInspectorTab = inspectorTab.dataset.inspectorTab;
       renderAll();
       return;
     }
-    const chatCommand = target.closest<HTMLButtonElement>("[data-chat]");
+    const chatCommand = target.closest("[data-chat]");
     if (chatCommand) {
       chatInput.value = chatCommand.dataset.chat || "";
       chatInput.focus();
       return;
     }
-    const useAgent = target.closest<HTMLButtonElement>("[data-agent-use]");
+    const useAgent = target.closest("[data-agent-use]");
     if (useAgent) {
       configureAgent(useAgent.dataset.agentUse || "custom");
       return;
     }
-    const action = target.closest<HTMLButtonElement>("[data-action]");
+    const action = target.closest("[data-action]");
     if (action) {
       runSlashCommand(action.dataset.action || "/status");
       return;
     }
-    const palette = target.closest<HTMLButtonElement>("[data-palette]");
+    const palette = target.closest("[data-palette]");
     if (palette) {
       state.paletteOpen = false;
       runSlashCommand(palette.dataset.palette || "/status");
@@ -606,8 +539,8 @@ function wireEvents() {
   byId("browse-workspace").addEventListener("click", browseWorkspace);
   byId("current-workspace").addEventListener("click", useCurrentWorkspace);
   byId("detect-agents").addEventListener("click", detectAgents);
-  byId<HTMLSelectElement>("agent-select").addEventListener("change", (event) => {
-    const select = event.target as HTMLSelectElement;
+  byId("agent-select").addEventListener("change", (event) => {
+    const select = event.target;
     state.selectedAgent = select.value;
     localStorage.setItem("thanos.agent", state.selectedAgent);
     pushActivity("Agent selected", `${state.selectedAgent} will be used for new tasks.`, "info");
@@ -636,10 +569,9 @@ function wireEvents() {
     }
   });
 }
-
 async function refreshBoard() {
   await runCli(["task", "list", "--json"], "Task list refreshed", (result) => {
-    const parsed = JSON.parse(result.stdout || "[]") as Task[];
+    const parsed = JSON.parse(result.stdout || "[]");
     state.tasks = parsed;
     if (!state.selectedTaskID && parsed[0]) {
       state.selectedTaskID = parsed[0].id;
@@ -647,7 +579,6 @@ async function refreshBoard() {
     }
   });
 }
-
 async function connectWorkspace() {
   const workspace = workspaceInput.value.trim();
   if (!workspace) {
@@ -664,10 +595,9 @@ async function connectWorkspace() {
   await readAgentProfiles();
   await refreshBoard();
 }
-
 async function browseWorkspace() {
   try {
-    const selected = await invoke<string | null>("select_workspace_folder");
+    const selected = await invoke("select_workspace_folder");
     if (!selected) {
       return;
     }
@@ -678,24 +608,22 @@ async function browseWorkspace() {
     renderAll();
   }
 }
-
 async function useCurrentWorkspace() {
   try {
-    workspaceInput.value = await invoke<string>("current_workspace_folder");
+    workspaceInput.value = await invoke("current_workspace_folder");
     await connectWorkspace();
   } catch (error) {
     pushActivity("Current folder unavailable", String(error), "fail");
     renderAll();
   }
 }
-
 async function ensureSelectedWorkspace() {
   const workspace = workspaceInput.value.trim();
   const binary = binaryInput.value.trim() || "thanos";
   state.busy = true;
   renderAll();
   try {
-    const info = await invoke<WorkspaceInfo>("ensure_workspace", { workspace, binary });
+    const info = await invoke("ensure_workspace", { workspace, binary });
     workspaceInput.value = info.path;
     saveSettings();
     if (info.initialized) {
@@ -712,10 +640,9 @@ async function ensureSelectedWorkspace() {
     renderAll();
   }
 }
-
 async function detectAgents() {
   try {
-    state.agents = await invoke<AgentCandidate[]>("detect_agent_clis");
+    state.agents = await invoke("detect_agent_clis");
     pushActivity("Agent CLIs detected", installedAgentSummary(), "info");
   } catch (error) {
     pushActivity("Agent detection failed", String(error), "fail");
@@ -723,7 +650,6 @@ async function detectAgents() {
     renderAll();
   }
 }
-
 async function readAgentProfiles() {
   const workspace = workspaceInput.value.trim();
   if (!workspace) {
@@ -731,7 +657,7 @@ async function readAgentProfiles() {
     return;
   }
   try {
-    const config = await invoke<{ agents: AgentProfile[] }>("read_agent_profiles", { workspace });
+    const config = await invoke("read_agent_profiles", { workspace });
     state.profiles = config.agents;
     if (!state.profiles.some((profile) => profile.name === state.selectedAgent) && state.profiles[0]) {
       state.selectedAgent = state.profiles[0].name;
@@ -742,8 +668,7 @@ async function readAgentProfiles() {
     pushActivity("Agent profiles unavailable", String(error), "warn");
   }
 }
-
-async function configureAgent(name: string) {
+async function configureAgent(name) {
   const workspace = workspaceInput.value.trim();
   if (!workspace) {
     pushActivity("Workspace required", "Set the workspace path before choosing an agent.", "warn");
@@ -754,16 +679,16 @@ async function configureAgent(name: string) {
   if (!candidate) {
     return;
   }
-  const profile: AgentProfile = {
+  const profile = {
     name: candidate.name,
     command: candidate.command,
     args: candidate.default_args,
     env: {},
     role: candidate.role,
-    allowed_steps: candidate.allowed_steps,
+    allowed_steps: candidate.allowed_steps
   };
   try {
-    const config = await invoke<{ agents: AgentProfile[] }>("write_agent_profile", { workspace, profile });
+    const config = await invoke("write_agent_profile", { workspace, profile });
     state.profiles = config.agents;
     state.selectedAgent = name;
     localStorage.setItem("thanos.agent", name);
@@ -774,12 +699,11 @@ async function configureAgent(name: string) {
     renderAll();
   }
 }
-
-async function runSlashCommand(value: string) {
+async function runSlashCommand(value) {
   const [command, ...rest] = value.trim().split(/\s+/);
   const selected = taskInput.value.trim() || state.selectedTaskID;
   const newTaskTitle = rest.join(" ").trim();
-  const map: Record<string, string[]> = {
+  const map = {
     "/status": ["task", "list", "--json"],
     "/task": ["task", "show", rest[0] || selected, "--json"],
     "/new": newTaskTitle ? ["task", "create", newTaskTitle, "--agent", state.selectedAgent] : [""],
@@ -788,7 +712,7 @@ async function runSlashCommand(value: string) {
     "/verify": ["task", "verify", selected],
     "/approve": ["task", "verify", selected, "approve"],
     "/reject": ["task", "verify", selected, "request-changes"],
-    "/help": ["help"],
+    "/help": ["help"]
   };
   const args = command === "/run" ? ["ask", rest.join(" ")] : map[command];
   if (!args || args.some((part) => part === "")) {
@@ -798,10 +722,10 @@ async function runSlashCommand(value: string) {
   }
   await runCli(args, `Command ${command} finished`, (result) => {
     if (command === "/status") {
-      state.tasks = JSON.parse(result.stdout || "[]") as Task[];
+      state.tasks = JSON.parse(result.stdout || "[]");
     }
     if (command === "/task") {
-      const task = JSON.parse(result.stdout || "{}") as Task;
+      const task = JSON.parse(result.stdout || "{}");
       state.tasks = upsertTask(state.tasks, task);
       state.selectedTaskID = task.id;
     }
@@ -810,8 +734,7 @@ async function runSlashCommand(value: string) {
     await refreshBoard();
   }
 }
-
-async function runCli(args: string[], successTitle: string, consume?: (result: CliResult) => void) {
+async function runCli(args, successTitle, consume) {
   const workspace = workspaceInput.value.trim();
   const binary = binaryInput.value.trim() || "thanos";
   if (!workspace) {
@@ -824,7 +747,7 @@ async function runCli(args: string[], successTitle: string, consume?: (result: C
   state.activeBottomTab = "terminal";
   renderAll();
   try {
-    const result = await invoke<CliResult>("run_thanos", { workspace, binary, args });
+    const result = await invoke("run_thanos", { workspace, binary, args });
     state.terminal = [result.command, result.stdout || "(no stdout)", result.stderr || "(no stderr)"];
     if (result.code === 0) {
       consume?.(result);
@@ -840,20 +763,17 @@ async function runCli(args: string[], successTitle: string, consume?: (result: C
     renderAll();
   }
 }
-
-function byId<T extends HTMLElement = HTMLElement>(id: string): T {
+function byId(id) {
   const element = document.getElementById(id);
   if (!element) {
     throw new Error(`${id} missing`);
   }
-  return element as T;
+  return element;
 }
-
 function selectedTask() {
   return state.tasks.find((task) => task.id === state.selectedTaskID) || state.tasks[0];
 }
-
-function normalizeStatus(status: string): TaskStatus {
+function normalizeStatus(status) {
   const lower = status.toLowerCase();
   if (lower === "plan" || lower === "analysis") return "plan";
   if (lower === "execute" || lower === "dev") return "execute";
@@ -861,81 +781,69 @@ function normalizeStatus(status: string): TaskStatus {
   if (lower === "done") return "done";
   return "backlog";
 }
-
-function taskProgress(task: Task) {
-  const values: Record<TaskStatus, number> = { backlog: 8, plan: 28, execute: 58, verify: 82, done: 100 };
+function taskProgress(task) {
+  const values = { backlog: 8, plan: 28, execute: 58, verify: 82, done: 100 };
   return values[normalizeStatus(task.status)];
 }
-
-function stepCopy(status: TaskStatus) {
+function stepCopy(status) {
   return {
     backlog: "Waiting for a plan. No implementation should start yet.",
     plan: "Plan once, ask for approval, and save reusable artifacts.",
     execute: "Run the agent against the saved plan only.",
     verify: "Review output, run tests, and wait for human approval.",
-    done: "Review and tests passed. Workflow is closed.",
+    done: "Review and tests passed. Workflow is closed."
   }[status];
 }
-
-function ownerInitial(task: Task) {
+function ownerInitial(task) {
   return (task.assigned_agent || "T").slice(0, 2).toUpperCase();
 }
-
-function formatUpdated(value?: string) {
+function formatUpdated(value) {
   if (!value) return "not synced";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  return date.toLocaleDateString(void 0, { month: "short", day: "numeric" });
 }
-
-function pushActivity(title: string, detail: string, tone: ActivityEvent["tone"]) {
+function pushActivity(title, detail, tone) {
   state.activity.unshift({
-    time: new Date().toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }),
+    time: (/* @__PURE__ */ new Date()).toLocaleTimeString(void 0, { hour: "2-digit", minute: "2-digit" }),
     title,
     detail,
-    tone,
+    tone
   });
   state.activity = state.activity.slice(0, 12);
 }
-
-function upsertTask(tasks: Task[], task: Task) {
+function upsertTask(tasks, task) {
   const index = tasks.findIndex((item) => item.id === task.id);
   if (index < 0) return [task, ...tasks];
   const next = [...tasks];
   next[index] = task;
   return next;
 }
-
 function restoreSettings() {
   workspaceInput.value = localStorage.getItem("thanos.workspace") ?? "";
   binaryInput.value = localStorage.getItem("thanos.binary") ?? "thanos";
 }
-
 function saveSettings() {
   localStorage.setItem("thanos.workspace", workspaceInput.value.trim());
   localStorage.setItem("thanos.binary", binaryInput.value.trim() || "thanos");
 }
-
-function fallbackAgents(): AgentCandidate[] {
+function fallbackAgents() {
   return [
     { name: "codex", command: "codex", installed: false, path: null, default_args: ["exec", "--full-auto", "-"], role: "implementation", allowed_steps: ["plan", "execute"] },
     { name: "claude", command: "claude", installed: false, path: null, default_args: ["--print", "--dangerously-skip-permissions"], role: "implementation", allowed_steps: ["plan", "execute"] },
     { name: "gemini", command: "gemini", installed: false, path: null, default_args: [], role: "implementation", allowed_steps: ["plan", "execute"] },
     { name: "opencode", command: "opencode", installed: false, path: null, default_args: [], role: "implementation", allowed_steps: ["plan", "execute"] },
-    { name: "custom", command: "", installed: true, path: null, default_args: [], role: "custom", allowed_steps: ["plan", "execute", "verify"] },
+    { name: "custom", command: "", installed: true, path: null, default_args: [], role: "custom", allowed_steps: ["plan", "execute", "verify"] }
   ];
 }
-
 function installedAgentSummary() {
   const installed = state.agents.filter((agent) => agent.installed).map((agent) => agent.name);
   return installed.length ? `Installed: ${installed.join(", ")}` : "No known agent CLIs found on PATH.";
 }
-
-function basename(path: string) {
+function basename(path) {
   const parts = path.split(/[\\/]/).filter(Boolean);
   return parts[parts.length - 1] || path;
 }
-
-function escapeHtml(value: string) {
+function escapeHtml(value) {
   return value.replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" })[char] || char);
 }
