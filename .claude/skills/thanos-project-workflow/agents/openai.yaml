@@ -1,0 +1,4 @@
+interface:
+  display_name: "Thanos Project Workflow"
+  short_description: "Run one ticket through Thanos quality gates"
+  default_prompt: "Use $thanos-project-workflow to take this Thanos ticket through planning, implementation, review, testing, and feature-graph memory updates."

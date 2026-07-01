@@ -1,0 +1,37 @@
+agents:
+  - name: codex
+    command: codex
+    args: [exec, --full-auto, -]
+    env:
+    role: implementation
+    allowed_steps: [plan, execute]
+  - name: claude
+    command: claude
+    args: [--print, --dangerously-skip-permissions]
+    env:
+    role: implementation
+    allowed_steps: [plan, execute]
+  - name: planner
+    command: claude
+    args: [--print, --dangerously-skip-permissions]
+    env:
+    role: planner
+    allowed_steps: [plan]
+  - name: coder
+    command: codex
+    args: [exec, --full-auto, -]
+    env:
+    role: coder
+    allowed_steps: [execute]
+  - name: reviewer
+    command: codex
+    args: [exec, --full-auto, -]
+    env:
+    role: reviewer
+    allowed_steps: [verify]
+  - name: tester
+    command: codex
+    args: [exec, --full-auto, -]
+    env:
+    role: tester
+    allowed_steps: [verify]

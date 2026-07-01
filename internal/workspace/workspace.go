@@ -118,6 +118,7 @@ func defaultAgents() model.AgentsConfig {
 		{Name: "codex", Command: "codex", Args: []string{"exec", "--full-auto", "-"}, Role: "implementation", AllowedSteps: []model.TaskStatus{model.TaskPlan, model.TaskExecute}},
 		{Name: "claude", Command: "claude", Args: []string{"--print", "--dangerously-skip-permissions"}, Role: "implementation", AllowedSteps: []model.TaskStatus{model.TaskPlan, model.TaskExecute}},
 		{Name: "gemini", Command: "gemini", Role: "implementation", AllowedSteps: []model.TaskStatus{model.TaskPlan, model.TaskExecute}},
+		{Name: "deepseek", Command: "deepseek", Role: "implementation", AllowedSteps: []model.TaskStatus{model.TaskPlan, model.TaskExecute}},
 		{Name: "opencode", Command: "opencode", Role: "implementation", AllowedSteps: []model.TaskStatus{model.TaskPlan, model.TaskExecute}},
 		{Name: "custom", Command: "", Role: "custom", AllowedSteps: []model.TaskStatus{model.TaskPlan, model.TaskExecute, model.TaskVerify}},
 	}}

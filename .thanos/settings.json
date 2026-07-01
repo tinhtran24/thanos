@@ -1,0 +1,38 @@
+{
+  "project": {
+    "name": "thanos",
+    "description": "",
+    "language": "go",
+    "package_manager": "npm",
+    "multi_package": true,
+    "packages": [
+      ".",
+      "apps/thanos-desktop",
+      "apps/thanos-desktop/src-tauri",
+      "cli-sample"
+    ],
+    "build": [
+      "npm --prefix apps/thanos-desktop run build"
+    ],
+    "rules": [
+      "Keep role outputs isolated in .thanos.",
+      "Do not bypass the deterministic phase state machine.",
+      "Every implementation change requires objective test evidence."
+    ]
+  },
+  "default_runner": "codex",
+  "max_rounds": 3,
+  "runners": {
+    "codex": {
+      "command": "codex",
+      "args": [
+        "exec",
+        "--full-auto",
+        "-"
+      ],
+      "agent": "codex",
+      "skills_dir": ".agents/skills"
+    }
+  },
+  "locale": "en"
+}

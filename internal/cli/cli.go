@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -968,21 +969,49 @@ func runTaskAgent(ctx context.Context, ws *workspace.Workspace, task model.Task,
 	return nil
 }
 
+// roleForStep maps a task workflow step to the agent-profile role that should
+// run it, so the per-role Agent Profiles matrix (planner/coder/reviewer/tester)
+// drives which agent executes each step.
+func roleForStep(step model.TaskStatus) string {
+	switch step {
+	case model.TaskPlan:
+		return "planner"
+	case model.TaskExecute:
+		return "coder"
+	case model.TaskVerify:
+		return "reviewer"
+	default:
+		return ""
+	}
+}
+
 func taskAgent(ws *workspace.Workspace, task model.Task, step model.TaskStatus) (model.AgentProfile, bool, error) {
 	agents, err := ws.ReadAgents()
 	if err != nil {
 		return model.AgentProfile{}, false, err
 	}
-	name := task.AssignedAgent
-	for _, profile := range agents.Agents {
-		if name == "" || profile.Name == name {
-			if agentAllows(profile, step) {
+	// An explicit per-task assignment always wins.
+	if name := task.AssignedAgent; name != "" {
+		for _, profile := range agents.Agents {
+			if profile.Name == name && agentAllows(profile, step) {
+				return profile, true, nil
+			}
+		}
+		return model.AgentProfile{}, false, fmt.Errorf("agent profile %q does not allow %s", name, step)
+	}
+	// Otherwise prefer the profile assigned to this step's role.
+	if role := roleForStep(step); role != "" {
+		for _, profile := range agents.Agents {
+			if strings.EqualFold(profile.Role, role) && profile.Command != "" && agentAllows(profile, step) {
 				return profile, true, nil
 			}
 		}
 	}
-	if name != "" {
-		return model.AgentProfile{}, false, fmt.Errorf("agent profile %q does not allow %s", name, step)
+	// Fall back to the first profile that allows the step.
+	for _, profile := range agents.Agents {
+		if agentAllows(profile, step) {
+			return profile, true, nil
+		}
 	}
 	return model.AgentProfile{}, false, nil
 }
@@ -1058,7 +1087,7 @@ func writeReviewReport(ws *workspace.Workspace, task model.Task) error {
 func runShellCommand(ctx context.Context, root, commandText string, stdout, stderr io.Writer, report io.Writer) error {
 	printExecLog(stdout, ui.ExecLogEntry{Type: "exec", Command: commandText, Workdir: root, Status: ui.Running})
 	started := time.Now()
-	cmd := exec.CommandContext(ctx, "sh", "-c", commandText)
+	cmd := shellCommand(ctx, commandText)
 	cmd.Dir = root
 	output, err := cmd.CombinedOutput()
 	fmt.Fprintln(report, "```")
@@ -1752,21 +1781,24 @@ func syncSkillsToRunner(root string, runnerConfig model.Runner, skills []model.S
 			return err
 		}
 		if info, err := os.Lstat(target); err == nil {
-			if info.Mode()&os.ModeSymlink == 0 {
+			if info.Mode()&os.ModeSymlink != 0 {
+				existing, readErr := os.Readlink(target)
+				if readErr != nil {
+					return readErr
+				}
+				resolved := existing
+				if !filepath.IsAbs(resolved) {
+					resolved = filepath.Join(filepath.Dir(target), resolved)
+				}
+				if filepath.Clean(resolved) == filepath.Clean(sourceDir) {
+					continue
+				}
+			} else if runtime.GOOS != "windows" {
+				// On non-Windows a real (non-symlink) entry is unexpected and
+				// must not be clobbered. On Windows this is a prior copy we refresh.
 				return fmt.Errorf("cannot sync skill %s: %s already exists and is not a symlink", skill.Name, target)
 			}
-			existing, readErr := os.Readlink(target)
-			if readErr != nil {
-				return readErr
-			}
-			resolved := existing
-			if !filepath.IsAbs(resolved) {
-				resolved = filepath.Join(filepath.Dir(target), resolved)
-			}
-			if filepath.Clean(resolved) == filepath.Clean(sourceDir) {
-				continue
-			}
-			if err := os.Remove(target); err != nil {
+			if err := os.RemoveAll(target); err != nil {
 				return err
 			}
 		} else if !os.IsNotExist(err) {
@@ -1776,11 +1808,55 @@ func syncSkillsToRunner(root string, runnerConfig model.Runner, skills []model.S
 		if err != nil {
 			return err
 		}
-		if err := os.Symlink(relative, target); err != nil {
+		if err := linkOrCopyDir(sourceDir, target, relative); err != nil {
 			return fmt.Errorf("link skill %s into %s: %w", skill.Name, targetRoot, err)
 		}
 	}
 	return nil
+}
+
+// shellCommand runs commandText through the platform shell (sh on Unix, cmd on
+// Windows) so project-configured test/build commands work cross-platform.
+func shellCommand(ctx context.Context, commandText string) *exec.Cmd {
+	if runtime.GOOS == "windows" {
+		return exec.CommandContext(ctx, "cmd", "/C", commandText)
+	}
+	return exec.CommandContext(ctx, "sh", "-c", commandText)
+}
+
+// linkOrCopyDir symlinks target -> sourceDir (via the relative linkName), and
+// falls back to a recursive copy on Windows where symlinks require privilege.
+func linkOrCopyDir(sourceDir, target, linkName string) error {
+	if err := os.Symlink(linkName, target); err == nil {
+		return nil
+	} else if runtime.GOOS != "windows" {
+		return err
+	}
+	return copyDir(sourceDir, target)
+}
+
+func copyDir(src, dst string) error {
+	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		targetPath := filepath.Join(dst, rel)
+		if info.IsDir() {
+			return os.MkdirAll(targetPath, 0o755)
+		}
+		if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
+			return err
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(targetPath, data, info.Mode().Perm())
+	})
 }
 
 func discoverSkillFiles(root string) (map[string]string, error) {

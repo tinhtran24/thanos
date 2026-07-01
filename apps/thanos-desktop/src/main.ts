@@ -1,4 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { Terminal } from "@xterm/xterm";
+import { FitAddon } from "@xterm/addon-fit";
+import "@xterm/xterm/css/xterm.css";
+import thanosLogo from "../src-tauri/imgs/logo/thanos-logo.png";
 import "./styles.css";
 
 type CliResult = {
@@ -62,6 +67,21 @@ type AgentProfile = {
   allowed_steps: string[];
 };
 
+type SkillInfo = {
+  name: string;
+  source: string;
+  roles: string[];
+};
+
+type ProjectConfig = {
+  name: string;
+  language: string;
+  framework: string;
+  default_runner: string;
+  skills: SkillInfo[];
+  mcp: string[];
+};
+
 const columns: Array<{ id: TaskStatus; title: string; hint: string }> = [
   { id: "backlog", title: "Backlog", hint: "" },
   { id: "plan", title: "Plan", hint: "Review" },
@@ -69,6 +89,17 @@ const columns: Array<{ id: TaskStatus; title: string; hint: string }> = [
   { id: "verify", title: "Verify", hint: "Review" },
   { id: "done", title: "Done", hint: "" },
 ];
+
+const ROLE_MATRIX: Array<{ key: string; label: string; steps: string[]; hint: string }> = [
+  { key: "planner", label: "Planner", steps: ["plan"], hint: "Plan step" },
+  { key: "coder", label: "Developer", steps: ["execute"], hint: "Execute step" },
+  { key: "reviewer", label: "Reviewer", steps: ["verify"], hint: "Verify · review" },
+  { key: "tester", label: "Tester", steps: ["verify"], hint: "Verify · tests" },
+];
+
+let term: Terminal | null = null;
+let fitAddon: FitAddon | null = null;
+let terminalRunning = false;
 
 const state: {
   tasks: Task[];
@@ -79,9 +110,16 @@ const state: {
   terminal: string[];
   agents: AgentCandidate[];
   profiles: AgentProfile[];
+  skills: SkillInfo[];
+  project: ProjectConfig | null;
+  branch: string;
   selectedAgent: string;
   busy: boolean;
-  paletteOpen: boolean;
+  modal: null | "task" | "skill";
+  modalError: string;
+  sidebarCollapsed: boolean;
+  inspectorOpen: boolean;
+  inspectorHidden: boolean;
 } = {
   tasks: [],
   selectedTaskID: "",
@@ -91,10 +129,21 @@ const state: {
   terminal: ["Waiting for CLI command output."],
   agents: [],
   profiles: [],
+  skills: [],
+  project: null,
+  branch: "main",
   selectedAgent: localStorage.getItem("thanos.agent") ?? "custom",
   busy: false,
-  paletteOpen: false,
+  modal: null,
+  modalError: "",
+  // Below the drawer breakpoint the sidebar starts closed so it doesn't cover the board.
+  sidebarCollapsed: typeof window !== "undefined" && window.innerWidth <= 1024,
+  inspectorOpen: false,
+  inspectorHidden: false,
 };
+
+const DRAWER_BREAKPOINT = 1024;
+const isNarrow = () => window.innerWidth <= DRAWER_BREAKPOINT;
 
 const app = document.querySelector<HTMLDivElement>("#app");
 
@@ -107,11 +156,10 @@ app.innerHTML = renderAppShell();
 const workspaceInput = byId<HTMLInputElement>("workspace");
 const binaryInput = byId<HTMLInputElement>("binary");
 const taskInput = byId<HTMLInputElement>("task-id");
-const chatInput = byId<HTMLInputElement>("chat-input");
-const commandInput = byId<HTMLInputElement>("palette-input");
 
 restoreSettings();
 wireEvents();
+initTerminalEvents();
 detectAgents();
 renderAll();
 
@@ -119,79 +167,85 @@ function renderAppShell() {
   return `
     <div class="noise"></div>
     <div class="desktop-shell">
+      <div id="scrim" class="scrim" aria-hidden="true"></div>
       ${renderSidebar()}
       <main class="workspace">
         ${renderTopbar()}
         <section class="workspace-grid">
           <section class="board-region">
             <div id="board" class="workflow-board"></div>
-            <div id="bottom-panel" class="bottom-panel"></div>
+            <div class="bottom-panel">
+              <div id="bottom-tabs" class="bottom-tabs"></div>
+              <div id="bottom-content" class="bottom-content"></div>
+              <div id="terminal-pane" class="terminal-pane" hidden>
+                <div class="terminal-toolbar">
+                  <span class="terminal-dot" id="terminal-dot"></span>
+                  <span id="terminal-status">idle</span>
+                  <span class="toolbar-spacer"></span>
+                  <button id="terminal-stop" class="soft-button">Stop</button>
+                  <button id="terminal-clear" class="soft-button">Clear</button>
+                </div>
+                <div id="terminal-host" class="terminal-host"></div>
+              </div>
+            </div>
           </section>
           <aside id="inspector" class="inspector"></aside>
         </section>
-        ${renderChatBar()}
       </main>
-      ${renderCommandPalette()}
+      <div id="modal-root"></div>
+      <div class="hidden-fields" hidden aria-hidden="true">
+        <input id="workspace" />
+        <input id="binary" value="thanos" />
+      </div>
     </div>
   `;
 }
 
 function renderSidebar() {
   const nav = [
-    ["dashboard", "Dashboard"],
     ["kanban", "Kanban"],
-    ["tasks", "Tasks"],
-    ["features", "Features"],
-    ["plans", "Plans"],
-    ["reviews", "Reviews"],
-    ["tests", "Tests"],
     ["worktrees", "Worktrees"],
-    ["settings", "Settings"],
   ];
   return `
     <aside class="sidebar" aria-label="Thanos navigation">
       <div class="brand">
-        <div class="brand-mark">${icon("bot")}</div>
-        <div>
-          <div class="brand-title">Thanos</div>
-          <div class="brand-subtitle">AI Workflow</div>
-        </div>
-        <button class="sidebar-toggle icon-button" title="Collapse sidebar">${icon("panel")}</button>
+        <img class="brand-logo" src="${thanosLogo}" alt="Thanos — AI-powered development workflow" />
+        <button id="sidebar-collapse" class="sidebar-toggle icon-button" title="Collapse sidebar">${icon("panel")}</button>
       </div>
       <nav class="nav-list">
         ${nav.map(([key, item]) => `<button class="nav-item ${item === "Kanban" ? "active" : ""}" data-command="/${key}">${icon(key)}<span>${item}</span></button>`).join("")}
       </nav>
-      <section class="sidebar-section workspace-card">
-        <div class="sidebar-heading">Workspace</div>
-        <div class="connection-row">
-          <span class="pulse"></span>
-          <div><strong id="workspace-name">thanos-cli</strong><small id="branch-name">main</small></div>
-          <span class="chevron">${icon("chevron")}</span>
-        </div>
-      </section>
-      <section class="sidebar-section">
-        <div class="sidebar-heading">Agent profiles</div>
-        <div id="agent-list" class="agent-list"></div>
-      </section>
+      <div class="sidebar-scroll">
+        <section class="sidebar-section workspace-card">
+          <div class="section-head">
+            <span class="sidebar-heading">Workspace</span>
+            <button id="browse-workspace" class="ghost-button" title="Choose a project folder">${icon("folder")}<span>Browse</span></button>
+          </div>
+          <div class="connection-row">
+            <span class="pulse"></span>
+            <div><strong id="workspace-name">Not connected</strong><small id="branch-name">main</small></div>
+          </div>
+        </section>
+        <section class="sidebar-section">
+          <div class="sidebar-heading">Agent profiles</div>
+          <div id="agent-list" class="agent-list"></div>
+        </section>
+        <section class="sidebar-section">
+          <div class="section-head">
+            <span class="sidebar-heading">Skills</span>
+            <button id="add-skill" class="ghost-button" title="Add a skill to this project">${icon("plus")}<span>Add</span></button>
+          </div>
+          <div id="skill-list" class="skill-list"></div>
+        </section>
+      </div>
       <section class="sidebar-footer">
-        <label>
-          Workspace
-          <input id="workspace" placeholder="/path/to/project" />
-        </label>
-        <div class="workspace-actions">
-          <button id="browse-workspace" class="soft-button">Browse</button>
-          <button id="current-workspace" class="soft-button">Current</button>
-          <button id="connect-workspace" class="soft-button">Connect</button>
-          <button id="detect-agents" class="soft-button">Detect CLIs</button>
+        <div class="profile-card">
+          <span class="avatar profile-avatar">${icon("bot")}</span>
+          <div>
+            <strong id="profile-name">Local workspace</strong>
+            <small id="profile-plan">Thanos CLI ${icon("star")}</small>
+          </div>
         </div>
-        <label>
-          CLI binary
-          <input id="binary" value="thanos" />
-        </label>
-        <label>
-          Task agent
-          <select id="agent-select"></select>
-        </label>
       </section>
     </aside>
   `;
@@ -211,92 +265,256 @@ function renderTopbar() {
         <label class="search-box">
           ${icon("search")}
           <input id="task-id" placeholder="Search tasks..." />
-          <kbd>⌘K</kbd>
         </label>
         <button class="soft-button filter-button">${icon("sliders")}<span>All Status</span>${icon("chevron")}</button>
         <button class="soft-button filter-button">${icon("sort")}<span>Newest</span>${icon("chevron")}</button>
         <button id="new-task-toggle" class="primary-button">${icon("plus")}<span>New Task</span></button>
         <button id="refresh" class="icon-button" title="Refresh">${icon("refresh")}</button>
+        <button id="inspector-toggle" class="icon-button" title="Show or hide the details panel">${icon("panel")}</button>
       </div>
     </header>
   `;
 }
 
-function renderChatBar() {
+function renderModal() {
+  if (!state.modal) {
+    return "";
+  }
+  const connected = Boolean(workspaceInput.value.trim());
+  const body = state.modal === "task" ? renderTaskForm(connected) : renderSkillForm(connected);
+  const title = state.modal === "task" ? "New task" : "Add skill";
+  const subtitle =
+    state.modal === "task"
+      ? "Create a task from the Backlog. Thanos runs it through Plan, Execute, and Verify."
+      : "Register a skill so agents can use it during this project's workflow.";
   return `
-    <footer class="chatbar">
-      <div class="shortcut-strip">
-        <button data-chat="/status">/status</button>
-        <button data-chat="/plan">/plan</button>
-        <button data-chat="/execute">/execute</button>
-        <button data-chat="/verify">/verify</button>
-        <button data-chat="/approve">/approve</button>
-        <button data-chat="/reject">/reject</button>
-        <button data-chat="/help">/help</button>
-      </div>
-      <form id="chat-form" class="chat-input-wrap">
-        <span>/</span>
-        <input id="chat-input" placeholder="Type message or /command..." />
-        <button class="send-button" title="Send command">${icon("send")}</button>
-      </form>
-    </footer>
-  `;
-}
-
-function renderCommandPalette() {
-  return `
-    <div id="command-palette" class="palette" hidden>
-      <div class="palette-card">
-        <div class="palette-title">Command palette</div>
-        <input id="palette-input" placeholder="Run task, open plan, approve step..." />
-        <div class="palette-list">
-          ${["/new", "/status", "/plan", "/execute", "/verify", "/approve", "/reject", "/help"].map((command) => `<button data-palette="${command}">${command}</button>`).join("")}
-        </div>
+    <div class="modal-overlay" data-modal-backdrop>
+      <div class="modal-card" role="dialog" aria-modal="true" aria-label="${title}">
+        <header class="modal-head">
+          <div>
+            <h2>${title}</h2>
+            <p>${subtitle}</p>
+          </div>
+          <button class="icon-button" data-modal-close title="Close">${icon("close")}</button>
+        </header>
+        ${state.modalError ? `<div class="modal-error">${icon("dot")}<span>${escapeHtml(state.modalError)}</span></div>` : ""}
+        ${body}
       </div>
     </div>
   `;
 }
 
+function renderTaskForm(connected: boolean) {
+  if (!connected) {
+    return renderModalDisconnected();
+  }
+  return `
+    <form id="modal-form" class="modal-form">
+      <label class="field">
+        <span>Title</span>
+        <input name="title" required autofocus placeholder="e.g. Add retry to the sync worker" />
+      </label>
+      <label class="field">
+        <span>Description <em>optional · Markdown or plain text</em></span>
+        <textarea name="description" class="mono" rows="6" placeholder="## Context&#10;Explain the task...&#10;&#10;## Acceptance criteria&#10;- [ ] ...&#10;- [ ] ..."></textarea>
+        <em class="helper">Supports Markdown (headings, lists, code). Saved to the task description.</em>
+      </label>
+      <label class="field">
+        <span>Priority</span>
+        <select name="priority">
+          <option value="high">High</option>
+          <option value="medium" selected>Medium</option>
+          <option value="low">Low</option>
+        </select>
+      </label>
+      <footer class="modal-actions">
+        <button type="button" class="soft-button" data-modal-close>Cancel</button>
+        <button type="submit" class="primary-button">${icon("plus")}<span>Create task</span></button>
+      </footer>
+    </form>
+  `;
+}
+
+function renderSkillForm(connected: boolean) {
+  if (!connected) {
+    return renderModalDisconnected();
+  }
+  return `
+    <form id="modal-form" class="modal-form">
+      <label class="field">
+        <span>Source</span>
+        <input name="source" required autofocus placeholder="owner/repo or a skills registry source" />
+        <em class="helper">Passed to <code>thanos skill add &lt;source&gt;</code>.</em>
+      </label>
+      <div class="field-grid">
+        <label class="field">
+          <span>Skill name <em>optional</em></span>
+          <input name="skill" placeholder="specific skill to install" />
+        </label>
+        <label class="field">
+          <span>Roles <em>optional</em></span>
+          <input name="roles" placeholder="planner, coder, reviewer" />
+        </label>
+      </div>
+      <footer class="modal-actions">
+        <button type="button" class="soft-button" data-modal-close>Cancel</button>
+        <button type="submit" class="primary-button">${icon("plus")}<span>Add skill</span></button>
+      </footer>
+    </form>
+  `;
+}
+
+function renderModalDisconnected() {
+  return `
+    <div class="modal-disconnected">
+      <p>Connect a workspace first — use <strong>Browse</strong> in the sidebar to choose your project folder.</p>
+      <footer class="modal-actions">
+        <button type="button" class="soft-button" data-modal-close>Close</button>
+        <button type="button" class="primary-button" id="modal-browse">${icon("folder")}<span>Browse</span></button>
+      </footer>
+    </div>
+  `;
+}
+
+
 function renderAll() {
   byId("board").innerHTML = renderBoard();
   byId("inspector").innerHTML = renderInspector();
-  byId("bottom-panel").innerHTML = renderBottomPanel();
+  byId("bottom-tabs").innerHTML = renderBottomTabs();
+  const showTerminal = state.activeBottomTab === "terminal";
+  byId("terminal-pane").toggleAttribute("hidden", !showTerminal);
+  byId("bottom-content").toggleAttribute("hidden", showTerminal);
+  if (showTerminal) {
+    fitTerminal();
+  } else {
+    byId("bottom-content").innerHTML = renderBottomContent();
+  }
   byId("agent-list").innerHTML = renderAgentProfiles();
-  renderAgentSelect();
-  byId("command-palette").toggleAttribute("hidden", !state.paletteOpen);
+  byId("skill-list").innerHTML = renderSkills();
+  byId("modal-root").innerHTML = renderModal();
+  const shell = document.querySelector(".desktop-shell");
+  shell?.classList.toggle("sidebar-collapsed", state.sidebarCollapsed);
+  shell?.classList.toggle("inspector-open", state.inspectorOpen && Boolean(selectedTask()));
+  shell?.classList.toggle("inspector-hidden", state.inspectorHidden);
   document.body.toggleAttribute("aria-busy", state.busy);
   const workspace = workspaceInput.value.trim();
-  byId("workspace-name").textContent = workspace ? basename(workspace) : "Not connected";
+  const projectName = state.project?.name || (workspace ? basename(workspace) : "Not connected");
+  byId("workspace-name").textContent = projectName;
+  byId("branch-name").textContent = state.branch || "main";
+  byId("profile-name").textContent = workspace ? basename(workspace) : "Local workspace";
+  const stack = [state.project?.language, state.project?.framework].filter(Boolean).join(" · ");
+  byId("profile-plan").innerHTML = `${escapeHtml(stack || "Thanos CLI")} ${icon("star")}`;
 }
 
-function renderAgentProfiles() {
-  const agents = state.agents.length ? state.agents : fallbackAgents();
-  return agents
-    .map((agent) => {
-      const configured = state.profiles.some((profile) => profile.name === agent.name);
-      const active = state.selectedAgent === agent.name ? "active" : "";
+function renderSkills() {
+  if (!state.skills.length) {
+    return `<div class="skill-empty">No skills registered yet. Use the <strong>Add</strong> button to install one for this project.</div>`;
+  }
+  return state.skills
+    .map((skill) => {
+      const scope = skill.roles.length ? skill.roles.join(", ") : "all roles";
       return `
-        <div class="agent-row ${active} ${agent.installed ? "installed" : "missing"}">
-          <span>${agent.name.slice(0, 1).toUpperCase()}</span>
+        <div class="skill-row" title="${escapeHtml(skill.source || skill.name)}">
+          <span class="skill-icon">${icon("skill")}</span>
           <div>
-            <strong>${escapeHtml(agent.name)}</strong>
-            <small>${agent.installed ? escapeHtml(agent.path || agent.command) : "not installed on PATH"}</small>
+            <strong>${escapeHtml(skill.name)}</strong>
+            <small>${escapeHtml(scope)}</small>
           </div>
-          <button data-agent-use="${agent.name}" ${agent.installed || agent.name === "custom" ? "" : "disabled"}>${configured ? "Use" : "Add"}</button>
         </div>
       `;
     })
     .join("");
 }
 
-function renderAgentSelect() {
-  const select = byId<HTMLSelectElement>("agent-select");
-  const agents = state.agents.length ? state.agents : fallbackAgents();
-  const names = new Set([...agents.map((agent) => agent.name), ...state.profiles.map((profile) => profile.name), "custom"]);
-  select.innerHTML = Array.from(names)
-    .map((name) => `<option value="${name}" ${name === state.selectedAgent ? "selected" : ""}>${name}</option>`)
-    .join("");
+function agentCandidates(): AgentCandidate[] {
+  return state.agents.length ? state.agents : fallbackAgents();
 }
+
+function agentNameForCommand(command: string): string {
+  if (!command) {
+    return "custom";
+  }
+  const match = agentCandidates().find((candidate) => candidate.command === command);
+  return match ? match.name : command;
+}
+
+function roleSelectedAgent(roleKey: string): string {
+  // Explicit assignment: a profile named after the role (matrix-written) or one
+  // whose `role:` field matches (hand-edited .thanos/agents.yaml).
+  const explicit = state.profiles.find(
+    (entry) => entry.name === roleKey || (entry.role || "").toLowerCase() === roleKey,
+  );
+  if (explicit) {
+    return agentNameForCommand(explicit.command);
+  }
+  // Otherwise reflect the workspace default runner from settings.json, so the
+  // matrix shows the agent that will actually run the step rather than "Not set".
+  const fallback = state.project?.default_runner;
+  if (fallback && agentCandidates().some((candidate) => candidate.name === fallback)) {
+    return fallback;
+  }
+  return "";
+}
+
+function renderAgentProfiles() {
+  const candidates = agentCandidates();
+  return ROLE_MATRIX.map((role) => {
+    const selected = roleSelectedAgent(role.key);
+    const options = [`<option value="" ${selected ? "" : "selected"}>Not set</option>`]
+      .concat(
+        candidates.map((candidate) => {
+          const label = candidate.installed || candidate.name === "custom" ? candidate.name : `${candidate.name} (not installed)`;
+          return `<option value="${candidate.name}" ${candidate.name === selected ? "selected" : ""}>${escapeHtml(label)}</option>`;
+        }),
+      )
+      .join("");
+    return `
+      <div class="role-row">
+        <span class="role-badge ${role.key}">${escapeHtml(role.label.slice(0, 1))}</span>
+        <div class="role-meta">
+          <strong>${role.label}</strong>
+          <small>${role.hint}</small>
+        </div>
+        <select class="role-select" data-role-agent="${role.key}" title="Agent for the ${role.label} role">${options}</select>
+      </div>
+    `;
+  }).join("");
+}
+
+async function configureRoleAgent(roleKey: string, agentName: string) {
+  const workspace = workspaceInput.value.trim();
+  if (!workspace) {
+    pushActivity("Workspace required", "Connect a workspace before assigning role agents.", "warn");
+    renderAll();
+    return;
+  }
+  const role = ROLE_MATRIX.find((entry) => entry.key === roleKey);
+  if (!role || !agentName) {
+    return;
+  }
+  const candidate = agentCandidates().find((entry) => entry.name === agentName);
+  if (!candidate) {
+    return;
+  }
+  const profile: AgentProfile = {
+    name: roleKey,
+    command: candidate.command,
+    args: candidate.default_args,
+    env: {},
+    role: roleKey,
+    allowed_steps: role.steps,
+  };
+  try {
+    const config = await invoke<{ agents: AgentProfile[] }>("write_agent_profile", { workspace, profile });
+    state.profiles = config.agents;
+    pushActivity("Role agent set", `${role.label} → ${agentName}`, "ok");
+  } catch (error) {
+    pushActivity("Role agent save failed", String(error), "fail");
+  } finally {
+    renderAll();
+  }
+}
+
 
 function renderBoard() {
   return columns
@@ -311,7 +529,7 @@ function renderBoard() {
           </header>
           <div class="column-stack">
             ${tasks.length ? tasks.map(renderTaskCard).join("") : `<div class="empty-card">No ${column.title.toLowerCase()} tasks from CLI JSON.</div>`}
-            <button class="add-task-button" data-chat="/new ">${icon("plus")}<span>Add task</span></button>
+            <button class="add-task-button" data-add-task>${icon("plus")}<span>Add task</span></button>
           </div>
         </section>
       `;
@@ -360,7 +578,7 @@ function renderInspector() {
         <span class="task-kicker">${task.id}</span>
         <span class="toolbar-spacer"></span>
         <button class="icon-button" title="More">${icon("more")}</button>
-        <button class="icon-button" title="Close">${icon("close")}</button>
+        <button class="icon-button" data-inspector-close title="Close">${icon("close")}</button>
       </div>
       <h2>${escapeHtml(task.title)}</h2>
       <div class="state-line"><span class="pill ${normalizeStatus(task.status)}">${icon("dot")} ${titleCase(normalizeStatus(task.status))}</span><span>${task.review_approved ? "review approved" : "waiting_for_review"}</span></div>
@@ -380,9 +598,9 @@ function renderInspector() {
       </div>
     </section>
     <section class="action-stack">
-      <button class="primary-button" data-action="/approve">Approve</button>
+      <button class="primary-button" data-run-task="${task.id}">${icon("send")}<span>Run ${runStepLabel(task)}</span></button>
+      <button class="soft-button" data-action="/approve">Approve</button>
       <button class="soft-button" data-action="/reject">Request changes</button>
-      <button class="soft-button" data-action="/execute">Run again</button>
       <button class="danger-button" data-action="/plan">Reopen plan</button>
     </section>
   `;
@@ -449,18 +667,37 @@ function renderArtifactPanel(title: string, path: string | undefined, rows: stri
   `;
 }
 
-function renderBottomPanel() {
-  const tabs = ["activity", "timeline", "terminal"] as const;
-  return `
-    <div class="bottom-tabs">
-      ${tabs.map((tab) => `<button class="${state.activeBottomTab === tab ? "active" : ""}" data-bottom-tab="${tab}">${tab}</button>`).join("")}
-    </div>
-    <div class="bottom-content">
-      ${state.activeBottomTab === "activity" ? renderActivity() : ""}
-      ${state.activeBottomTab === "timeline" ? renderTimeline() : ""}
-      ${state.activeBottomTab === "terminal" ? renderTerminal() : ""}
-    </div>
-  `;
+
+
+
+function renderBottomTabs() {
+  type BottomTab = "activity" | "timeline" | "terminal";
+
+  const bottomTabs: { id: BottomTab; label: string }[] = [
+    { id: "activity", label: "Activity" },
+    { id: "timeline", label: "Timeline" },
+    { id: "terminal", label: "Terminal" },
+  ];
+
+  return bottomTabs
+      .map(
+          ({ id, label }) => `
+        <button
+          class="bottom-tab ${state.activeBottomTab === id ? "active" : ""}"
+          data-bottom-tab="${id}"
+        >
+          ${label}
+        </button>
+      `
+      )
+      .join("");
+}
+
+function renderBottomContent() {
+  if (state.activeBottomTab === "timeline") {
+    return renderTimeline();
+  }
+  return renderActivity();
 }
 
 function renderActivity() {
@@ -504,6 +741,9 @@ function icon(name: string) {
     send: "➤",
     close: "×",
     dot: "●",
+    folder: "🗀",
+    skill: "✦",
+    star: "★",
   };
   return `<span class="ui-icon" aria-hidden="true">${icons[name] || "•"}</span>`;
 }
@@ -536,36 +776,159 @@ function renderTimeline() {
   `;
 }
 
-function renderTerminal() {
-  return `<pre class="terminal">${escapeHtml(state.terminal.join("\n\n"))}</pre>`;
+// ---- Embedded PTY terminal (xterm.js) ----
+
+function ensureTerminal() {
+  if (term) {
+    return;
+  }
+  term = new Terminal({
+    fontFamily: '"SFMono-Regular", Consolas, "Liberation Mono", monospace',
+    fontSize: 12,
+    cursorBlink: true,
+    scrollback: 5000,
+    theme: {
+      background: "#0a1220",
+      foreground: "#cbd6ea",
+      cursor: "#3d72ff",
+      selectionBackground: "rgba(61,114,255,0.32)",
+    },
+  });
+  fitAddon = new FitAddon();
+  term.loadAddon(fitAddon);
+  term.open(byId("terminal-host"));
+  term.onData((data) => {
+    void invoke("write_terminal", { data }).catch(() => {});
+  });
+  term.writeln("\x1b[38;5;244mThanos terminal ready. Run a task step to watch the agent work here.\x1b[0m");
+}
+
+function fitTerminal() {
+  ensureTerminal();
+  requestAnimationFrame(() => {
+    try {
+      fitAddon?.fit();
+      if (term && terminalRunning) {
+        void invoke("resize_terminal", { rows: term.rows, cols: term.cols }).catch(() => {});
+      }
+    } catch {
+      // terminal-host may not be laid out yet; ignore.
+    }
+  });
+}
+
+function setTerminalStatus(status: "idle" | "running") {
+  terminalRunning = status === "running";
+  const label = byId("terminal-status");
+  label.textContent = status;
+  byId("terminal-dot").classList.toggle("live", terminalRunning);
+}
+
+async function runInTerminal(args: string[]) {
+  const workspace = workspaceInput.value.trim();
+  const binary = binaryInput.value.trim() || "thanos";
+  if (!workspace) {
+    pushActivity("Workspace required", "Connect a workspace before running a step.", "warn");
+    renderAll();
+    return;
+  }
+  saveSettings();
+  state.activeBottomTab = "terminal";
+  renderAll();
+  ensureTerminal();
+  fitTerminal();
+  setTerminalStatus("running");
+  term?.writeln("");
+  try {
+    await invoke("spawn_terminal", { workspace, binary, args });
+  } catch (error) {
+    term?.writeln(`\x1b[31m${String(error)}\x1b[0m`);
+    setTerminalStatus("idle");
+  }
+}
+
+function initTerminalEvents() {
+  try {
+    void listen<string>("terminal-output", (event) => {
+      ensureTerminal();
+      term?.write(event.payload);
+    });
+    void listen<number>("terminal-exit", (event) => {
+      ensureTerminal();
+      term?.write(`\r\n\x1b[38;5;244m[process exited with code ${event.payload}]\x1b[0m\r\n`);
+      setTerminalStatus("idle");
+      void refreshBoard();
+    });
+  } catch {
+    // Event bridge is only available inside the Tauri runtime.
+  }
+  window.addEventListener("resize", () => {
+    if (state.activeBottomTab === "terminal") {
+      fitTerminal();
+    }
+  });
+}
+
+function runStepLabel(task: Task): string {
+  const step = normalizeStatus(task.status);
+  if (step === "backlog" || step === "plan") {
+    return "plan";
+  }
+  if (step === "verify") {
+    return "verify";
+  }
+  return "execute";
+}
+
+function taskRunArgs(task: Task): string[] {
+  return ["task", runStepLabel(task), task.id];
 }
 
 function wireEvents() {
   byId("refresh").addEventListener("click", refreshBoard);
-  byId("new-task-toggle").addEventListener("click", () => {
-    chatInput.value = "/new ";
-    chatInput.focus();
+  byId("new-task-toggle").addEventListener("click", () => openModal("task"));
+  byId("browse-workspace").addEventListener("click", browseWorkspace);
+  byId("add-skill").addEventListener("click", () => openModal("skill"));
+  byId("menu-button").addEventListener("click", toggleSidebar);
+  byId("sidebar-collapse").addEventListener("click", toggleSidebar);
+  byId("inspector-toggle").addEventListener("click", toggleInspector);
+  byId("scrim").addEventListener("click", closeDrawers);
+  byId("terminal-stop").addEventListener("click", () => {
+    void invoke("kill_terminal").catch(() => {});
+    setTerminalStatus("idle");
   });
-  byId("chat-form").addEventListener("submit", (event) => {
-    event.preventDefault();
-    const value = chatInput.value.trim();
-    if (!value) {
-      return;
-    }
-    chatInput.value = "";
-    if (value.startsWith("/")) {
-      runSlashCommand(value);
-    } else {
-      pushActivity("Question noted", value, "info");
-    }
-  });
+  byId("terminal-clear").addEventListener("click", () => term?.clear());
+
   document.addEventListener("click", (event) => {
     const target = event.target as HTMLElement;
+    // Close on an explicit close/cancel button, or a direct click on the backdrop
+    // itself — never when interacting with fields inside the modal card.
+    if (target.closest("[data-modal-close]") || target.hasAttribute("data-modal-backdrop")) {
+      closeModal();
+      return;
+    }
+    if (target.closest("#modal-browse")) {
+      browseWorkspace();
+      return;
+    }
+    if (target.closest("[data-inspector-close]")) {
+      state.inspectorOpen = false;
+      state.inspectorHidden = true;
+      renderAll();
+      return;
+    }
     const taskCard = target.closest<HTMLElement>("[data-task-id]");
     if (taskCard) {
       state.selectedTaskID = taskCard.dataset.taskId || "";
       taskInput.value = state.selectedTaskID;
+      // Reveal the details panel (desktop) / drawer (mobile) for the clicked task.
+      state.inspectorOpen = true;
+      state.inspectorHidden = false;
       renderAll();
+      return;
+    }
+    if (target.closest("[data-add-task]")) {
+      openModal("task");
       return;
     }
     const bottomTab = target.closest<HTMLButtonElement>("[data-bottom-tab]");
@@ -580,15 +943,12 @@ function wireEvents() {
       renderAll();
       return;
     }
-    const chatCommand = target.closest<HTMLButtonElement>("[data-chat]");
-    if (chatCommand) {
-      chatInput.value = chatCommand.dataset.chat || "";
-      chatInput.focus();
-      return;
-    }
-    const useAgent = target.closest<HTMLButtonElement>("[data-agent-use]");
-    if (useAgent) {
-      configureAgent(useAgent.dataset.agentUse || "custom");
+    const runTask = target.closest<HTMLElement>("[data-run-task]");
+    if (runTask) {
+      const task = state.tasks.find((entry) => entry.id === runTask.dataset.runTask) || selectedTask();
+      if (task) {
+        void runInTerminal(taskRunArgs(task));
+      }
       return;
     }
     const action = target.closest<HTMLButtonElement>("[data-action]");
@@ -596,45 +956,93 @@ function wireEvents() {
       runSlashCommand(action.dataset.action || "/status");
       return;
     }
-    const palette = target.closest<HTMLButtonElement>("[data-palette]");
-    if (palette) {
-      state.paletteOpen = false;
-      runSlashCommand(palette.dataset.palette || "/status");
+  });
+
+  document.addEventListener("change", (event) => {
+    const roleSelect = (event.target as HTMLElement).closest<HTMLSelectElement>("[data-role-agent]");
+    if (roleSelect) {
+      configureRoleAgent(roleSelect.dataset.roleAgent || "", roleSelect.value);
     }
   });
-  byId("connect-workspace").addEventListener("click", connectWorkspace);
-  byId("browse-workspace").addEventListener("click", browseWorkspace);
-  byId("current-workspace").addEventListener("click", useCurrentWorkspace);
-  byId("detect-agents").addEventListener("click", detectAgents);
-  byId<HTMLSelectElement>("agent-select").addEventListener("change", (event) => {
-    const select = event.target as HTMLSelectElement;
-    state.selectedAgent = select.value;
-    localStorage.setItem("thanos.agent", state.selectedAgent);
-    pushActivity("Agent selected", `${state.selectedAgent} will be used for new tasks.`, "info");
-    renderAll();
-  });
-  document.addEventListener("keydown", (event) => {
-    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
-      event.preventDefault();
-      state.paletteOpen = !state.paletteOpen;
-      renderAll();
-      if (state.paletteOpen) {
-        commandInput.focus();
-      }
+
+  document.addEventListener("submit", (event) => {
+    const form = (event.target as HTMLElement).closest<HTMLFormElement>("#modal-form");
+    if (!form) {
       return;
     }
-    if (event.key === "/") {
-      const active = document.activeElement?.tagName.toLowerCase();
-      if (active !== "input" && active !== "textarea") {
-        event.preventDefault();
-        chatInput.focus();
-      }
-    }
-    if (event.key === "Escape" && state.paletteOpen) {
-      state.paletteOpen = false;
-      renderAll();
+    event.preventDefault();
+    const data = new FormData(form);
+    if (state.modal === "task") {
+      submitTask(data);
+    } else if (state.modal === "skill") {
+      submitSkill(data);
     }
   });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") {
+      return;
+    }
+    if (state.modal) {
+      closeModal();
+    } else if (isNarrow() && (!state.sidebarCollapsed || state.inspectorOpen)) {
+      closeDrawers();
+    }
+  });
+
+  let lastNarrow = isNarrow();
+  window.addEventListener("resize", () => {
+    const narrow = isNarrow();
+    if (narrow === lastNarrow) {
+      return;
+    }
+    lastNarrow = narrow;
+    // Collapse the drawer when entering narrow mode; restore it on desktop.
+    state.sidebarCollapsed = narrow;
+    state.inspectorOpen = false;
+    renderAll();
+  });
+}
+
+function toggleSidebar() {
+  state.sidebarCollapsed = !state.sidebarCollapsed;
+  // Opening the sidebar drawer on a narrow screen should hide the inspector drawer.
+  if (!state.sidebarCollapsed && isNarrow()) {
+    state.inspectorOpen = false;
+  }
+  renderAll();
+}
+
+function toggleInspector() {
+  if (isNarrow()) {
+    // On small screens the inspector is a drawer keyed off inspectorOpen.
+    state.inspectorOpen = !state.inspectorOpen;
+  } else {
+    state.inspectorHidden = !state.inspectorHidden;
+  }
+  renderAll();
+}
+
+function closeDrawers() {
+  if (isNarrow()) {
+    state.sidebarCollapsed = true;
+  }
+  state.inspectorOpen = false;
+  renderAll();
+}
+
+function openModal(kind: "task" | "skill") {
+  state.modal = kind;
+  state.modalError = "";
+  renderAll();
+  const first = document.querySelector<HTMLElement>("#modal-form [autofocus]");
+  first?.focus();
+}
+
+function closeModal() {
+  state.modal = null;
+  state.modalError = "";
+  renderAll();
 }
 
 async function refreshBoard() {
@@ -662,7 +1070,46 @@ async function connectWorkspace() {
     return;
   }
   await readAgentProfiles();
+  await readProjectConfig();
+  await readBranch();
   await refreshBoard();
+}
+
+async function readProjectConfig() {
+  const workspace = workspaceInput.value.trim();
+  if (!workspace) {
+    return;
+  }
+  try {
+    const config = await invoke<ProjectConfig>("read_project_config", { workspace });
+    state.project = config;
+    state.skills = config.skills;
+    pushActivity("Project loaded", `${config.name || basename(workspace)} · ${config.skills.length} skills`, "ok");
+  } catch (error) {
+    state.project = null;
+    state.skills = [];
+    pushActivity("Project config unavailable", String(error), "warn");
+  } finally {
+    renderAll();
+  }
+}
+
+async function readBranch() {
+  const workspace = workspaceInput.value.trim();
+  if (!workspace) {
+    return;
+  }
+  try {
+    const result = await invoke<CliResult>("run_thanos", { workspace, binary: "git", args: ["branch", "--show-current"] });
+    const branch = (result.stdout || "").trim();
+    if (branch) {
+      state.branch = branch;
+    }
+  } catch {
+    // branch is best-effort; keep the previous value.
+  } finally {
+    renderAll();
+  }
 }
 
 async function browseWorkspace() {
@@ -675,16 +1122,6 @@ async function browseWorkspace() {
     await connectWorkspace();
   } catch (error) {
     pushActivity("Folder selection failed", String(error), "fail");
-    renderAll();
-  }
-}
-
-async function useCurrentWorkspace() {
-  try {
-    workspaceInput.value = await invoke<string>("current_workspace_folder");
-    await connectWorkspace();
-  } catch (error) {
-    pushActivity("Current folder unavailable", String(error), "fail");
     renderAll();
   }
 }
@@ -743,38 +1180,6 @@ async function readAgentProfiles() {
   }
 }
 
-async function configureAgent(name: string) {
-  const workspace = workspaceInput.value.trim();
-  if (!workspace) {
-    pushActivity("Workspace required", "Set the workspace path before choosing an agent.", "warn");
-    renderAll();
-    return;
-  }
-  const candidate = (state.agents.length ? state.agents : fallbackAgents()).find((agent) => agent.name === name);
-  if (!candidate) {
-    return;
-  }
-  const profile: AgentProfile = {
-    name: candidate.name,
-    command: candidate.command,
-    args: candidate.default_args,
-    env: {},
-    role: candidate.role,
-    allowed_steps: candidate.allowed_steps,
-  };
-  try {
-    const config = await invoke<{ agents: AgentProfile[] }>("write_agent_profile", { workspace, profile });
-    state.profiles = config.agents;
-    state.selectedAgent = name;
-    localStorage.setItem("thanos.agent", name);
-    pushActivity("Agent profile saved", `${name} now points to ${candidate.path || candidate.command || "custom command"}.`, "ok");
-  } catch (error) {
-    pushActivity("Agent save failed", String(error), "fail");
-  } finally {
-    renderAll();
-  }
-}
-
 async function runSlashCommand(value: string) {
   const [command, ...rest] = value.trim().split(/\s+/);
   const selected = taskInput.value.trim() || state.selectedTaskID;
@@ -790,6 +1195,16 @@ async function runSlashCommand(value: string) {
     "/reject": ["task", "verify", selected, "request-changes"],
     "/help": ["help"],
   };
+  if (command === "/skill") {
+    if (!rest.length) {
+      pushActivity("Skill command needs args", "Try /skill add <source> or /skill find <query>.", "warn");
+      renderAll();
+      return;
+    }
+    await runCli(["skill", ...rest], "Skill command finished");
+    await readProjectConfig();
+    return;
+  }
   const args = command === "/run" ? ["ask", rest.join(" ")] : map[command];
   if (!args || args.some((part) => part === "")) {
     pushActivity("Command needs a task", `${command} requires a selected task.`, "warn");
@@ -811,24 +1226,76 @@ async function runSlashCommand(value: string) {
   }
 }
 
-async function runCli(args: string[], successTitle: string, consume?: (result: CliResult) => void) {
+async function submitTask(data: FormData) {
+  const title = String(data.get("title") || "").trim();
+  if (!title) {
+    state.modalError = "Give the task a title.";
+    renderAll();
+    return;
+  }
+  const description = String(data.get("description") || "").trim();
+  const priority = String(data.get("priority") || "medium");
+  // Agent is no longer chosen per task; the Agent Profiles role matrix drives execution.
+  const args = ["task", "create", title, "--priority", priority];
+  if (description) {
+    args.push("--description", description);
+  }
+  const ok = await runCli(args, `Created task ${title}`);
+  if (ok) {
+    closeModal();
+    await refreshBoard();
+  } else {
+    state.modalError = "Could not create the task. See the terminal panel for details.";
+    renderAll();
+  }
+}
+
+async function submitSkill(data: FormData) {
+  const source = String(data.get("source") || "").trim();
+  if (!source) {
+    state.modalError = "Enter a skill source (e.g. owner/repo).";
+    renderAll();
+    return;
+  }
+  const skill = String(data.get("skill") || "").trim();
+  const roles = String(data.get("roles") || "").trim();
+  const args = ["skill", "add", source];
+  if (skill) {
+    args.push("--skill", skill);
+  }
+  if (roles) {
+    args.push("--roles", roles.split(/[,\s]+/).filter(Boolean).join(","));
+  }
+  const ok = await runCli(args, `Added skill from ${source}`);
+  if (ok) {
+    closeModal();
+    await readProjectConfig();
+  } else {
+    state.modalError = "Could not add the skill. See the terminal panel for details.";
+    renderAll();
+  }
+}
+
+async function runCli(args: string[], successTitle: string, consume?: (result: CliResult) => void): Promise<boolean> {
   const workspace = workspaceInput.value.trim();
   const binary = binaryInput.value.trim() || "thanos";
   if (!workspace) {
     pushActivity("Workspace required", "Set a local Thanos workspace before running commands.", "warn");
     renderAll();
-    return;
+    return false;
   }
   saveSettings();
   state.busy = true;
   state.activeBottomTab = "terminal";
   renderAll();
+  let ok = false;
   try {
     const result = await invoke<CliResult>("run_thanos", { workspace, binary, args });
     state.terminal = [result.command, result.stdout || "(no stdout)", result.stderr || "(no stderr)"];
     if (result.code === 0) {
       consume?.(result);
       pushActivity(successTitle, result.command, "ok");
+      ok = true;
     } else {
       pushActivity("Command failed", result.stderr || result.command, "fail");
     }
@@ -839,6 +1306,7 @@ async function runCli(args: string[], successTitle: string, consume?: (result: C
     state.busy = false;
     renderAll();
   }
+  return ok;
 }
 
 function byId<T extends HTMLElement = HTMLElement>(id: string): T {
@@ -921,6 +1389,7 @@ function fallbackAgents(): AgentCandidate[] {
     { name: "codex", command: "codex", installed: false, path: null, default_args: ["exec", "--full-auto", "-"], role: "implementation", allowed_steps: ["plan", "execute"] },
     { name: "claude", command: "claude", installed: false, path: null, default_args: ["--print", "--dangerously-skip-permissions"], role: "implementation", allowed_steps: ["plan", "execute"] },
     { name: "gemini", command: "gemini", installed: false, path: null, default_args: [], role: "implementation", allowed_steps: ["plan", "execute"] },
+    { name: "deepseek", command: "deepseek", installed: false, path: null, default_args: [], role: "implementation", allowed_steps: ["plan", "execute"] },
     { name: "opencode", command: "opencode", installed: false, path: null, default_args: [], role: "implementation", allowed_steps: ["plan", "execute"] },
     { name: "custom", command: "", installed: true, path: null, default_args: [], role: "custom", allowed_steps: ["plan", "execute", "verify"] },
   ];

@@ -1,10 +1,23 @@
+use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
     fs,
+    io::{Read, Write},
     path::{Path, PathBuf},
     process::Command,
+    sync::Mutex,
 };
+use tauri::{AppHandle, Emitter, Manager, State};
+
+/// One active PTY-backed terminal session. Only a single flow runs in the
+/// embedded terminal at a time; spawning a new one replaces the previous.
+#[derive(Default)]
+struct TerminalSession {
+    writer: Mutex<Option<Box<dyn Write + Send>>>,
+    master: Mutex<Option<Box<dyn MasterPty + Send>>>,
+    killer: Mutex<Option<Box<dyn ChildKiller + Send + Sync>>>,
+}
 
 #[derive(Serialize)]
 struct CliResult {
@@ -35,6 +48,23 @@ struct AgentCandidate {
 #[derive(Deserialize, Serialize, Clone)]
 struct AgentsConfig {
     agents: Vec<AgentProfile>,
+}
+
+#[derive(Serialize, Default)]
+struct ProjectConfig {
+    name: String,
+    language: String,
+    framework: String,
+    default_runner: String,
+    skills: Vec<SkillInfo>,
+    mcp: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct SkillInfo {
+    name: String,
+    source: String,
+    roles: Vec<String>,
 }
 
 #[derive(Deserialize, Serialize, Clone)]
@@ -150,6 +180,59 @@ fn read_agent_profiles(workspace: String) -> Result<AgentsConfig, String> {
 }
 
 #[tauri::command]
+fn read_project_config(workspace: String) -> Result<ProjectConfig, String> {
+    let workspace_path = validate_workspace(&workspace)?;
+    let path = workspace_path.join(".thanos").join("settings.json");
+    let data = fs::read_to_string(&path).map_err(|err| format!("failed to read {}: {err}", path.display()))?;
+    let value: serde_json::Value =
+        serde_json::from_str(&data).map_err(|err| format!("failed to parse {}: {err}", path.display()))?;
+
+    let project = value.get("project");
+    let string_field = |parent: Option<&serde_json::Value>, key: &str| -> String {
+        parent
+            .and_then(|node| node.get(key))
+            .and_then(|node| node.as_str())
+            .unwrap_or_default()
+            .to_string()
+    };
+
+    let mut skills = Vec::new();
+    if let Some(items) = value.get("skills").and_then(|node| node.as_array()) {
+        for item in items {
+            let roles = item
+                .get("roles")
+                .and_then(|node| node.as_array())
+                .map(|list| {
+                    list.iter()
+                        .filter_map(|role| role.as_str().map(|value| value.to_string()))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            skills.push(SkillInfo {
+                name: string_field(Some(item), "name"),
+                source: string_field(Some(item), "source"),
+                roles,
+            });
+        }
+    }
+
+    let mut mcp = Vec::new();
+    if let Some(map) = value.get("mcp").and_then(|node| node.as_object()) {
+        mcp = map.keys().cloned().collect();
+        mcp.sort();
+    }
+
+    Ok(ProjectConfig {
+        name: string_field(project, "name"),
+        language: string_field(project, "language"),
+        framework: string_field(project, "framework"),
+        default_runner: string_field(Some(&value), "default_runner"),
+        skills,
+        mcp,
+    })
+}
+
+#[tauri::command]
 fn write_agent_profile(workspace: String, profile: AgentProfile) -> Result<AgentsConfig, String> {
     let workspace_path = validate_workspace(&workspace)?;
     let path = workspace_path.join(".thanos").join("agents.yaml");
@@ -162,6 +245,115 @@ fn write_agent_profile(workspace: String, profile: AgentProfile) -> Result<Agent
     }
     fs::write(&path, render_agents_yaml(&config)).map_err(|err| format!("failed to write {}: {err}", path.display()))?;
     Ok(config)
+}
+
+/// Spawn a command in a PTY and stream its output to the frontend via
+/// `terminal-output` events, emitting `terminal-exit` with the exit code when
+/// it finishes. Replaces any previously running session.
+#[tauri::command]
+fn spawn_terminal(
+    app: AppHandle,
+    session: State<'_, TerminalSession>,
+    workspace: String,
+    binary: String,
+    args: Vec<String>,
+) -> Result<(), String> {
+    let workspace_path = validate_workspace(&workspace)?;
+    let binary = normalize_binary(binary);
+
+    if let Some(mut killer) = session.killer.lock().unwrap().take() {
+        let _ = killer.kill();
+    }
+
+    let pair = native_pty_system()
+        .openpty(PtySize {
+            rows: 24,
+            cols: 100,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .map_err(|err| format!("failed to open pty: {err}"))?;
+
+    let mut cmd = CommandBuilder::new(&binary);
+    cmd.args(&args);
+    cmd.cwd(&workspace_path);
+    cmd.env("THANOS_PROJECT_ROOT", workspace_path.display().to_string());
+
+    let mut child = pair
+        .slave
+        .spawn_command(cmd)
+        .map_err(|err| format!("failed to run {binary}: {err}"))?;
+    drop(pair.slave);
+
+    let killer = child.clone_killer();
+    let writer = pair
+        .master
+        .take_writer()
+        .map_err(|err| format!("failed to open pty writer: {err}"))?;
+    let mut reader = pair
+        .master
+        .try_clone_reader()
+        .map_err(|err| format!("failed to open pty reader: {err}"))?;
+
+    *session.writer.lock().unwrap() = Some(writer);
+    *session.killer.lock().unwrap() = Some(killer);
+    *session.master.lock().unwrap() = Some(pair.master);
+
+    let command_line = format!("{} {}", binary, shell_join(&args));
+    let _ = app.emit("terminal-output", format!("\x1b[38;5;244m$ {command_line}\x1b[0m\r\n"));
+
+    std::thread::spawn(move || {
+        let mut buffer = [0u8; 4096];
+        loop {
+            match reader.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(count) => {
+                    let chunk = String::from_utf8_lossy(&buffer[..count]).to_string();
+                    if app.emit("terminal-output", chunk).is_err() {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+        let code = child.wait().map(|status| status.exit_code() as i32).unwrap_or(-1);
+        let _ = app.emit("terminal-exit", code);
+    });
+
+    Ok(())
+}
+
+#[tauri::command]
+fn write_terminal(session: State<'_, TerminalSession>, data: String) -> Result<(), String> {
+    let mut guard = session.writer.lock().unwrap();
+    if let Some(writer) = guard.as_mut() {
+        writer.write_all(data.as_bytes()).map_err(|err| err.to_string())?;
+        writer.flush().map_err(|err| err.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn resize_terminal(session: State<'_, TerminalSession>, rows: u16, cols: u16) -> Result<(), String> {
+    if let Some(master) = session.master.lock().unwrap().as_ref() {
+        master
+            .resize(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .map_err(|err| err.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn kill_terminal(session: State<'_, TerminalSession>) -> Result<(), String> {
+    if let Some(mut killer) = session.killer.lock().unwrap().take() {
+        let _ = killer.kill();
+    }
+    Ok(())
 }
 
 fn validate_workspace(value: &str) -> Result<PathBuf, String> {
@@ -311,6 +503,14 @@ fn known_agents() -> Vec<AgentProfile> {
             allowed_steps: vec!["plan".to_string(), "execute".to_string()],
         },
         AgentProfile {
+            name: "deepseek".to_string(),
+            command: "deepseek".to_string(),
+            args: vec![],
+            env: BTreeMap::new(),
+            role: "implementation".to_string(),
+            allowed_steps: vec!["plan".to_string(), "execute".to_string()],
+        },
+        AgentProfile {
             name: "opencode".to_string(),
             command: "opencode".to_string(),
             args: vec![],
@@ -343,8 +543,31 @@ fn find_on_path(command: &str) -> Option<PathBuf> {
         if full.is_file() {
             return Some(full);
         }
+        for ext in executable_extensions() {
+            let candidate = dir.join(format!("{command}{ext}"));
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
     }
     None
+}
+
+/// Executable suffixes to probe on Windows (from PATHEXT, e.g. .exe/.cmd/.bat)
+/// so agents installed as `claude.exe` are detected. Empty on other platforms.
+#[cfg(target_os = "windows")]
+fn executable_extensions() -> Vec<String> {
+    std::env::var("PATHEXT")
+        .unwrap_or_else(|_| ".EXE;.CMD;.BAT;.COM".to_string())
+        .split(';')
+        .filter(|ext| !ext.is_empty())
+        .map(|ext| ext.to_lowercase())
+        .collect()
+}
+
+#[cfg(not(target_os = "windows"))]
+fn executable_extensions() -> Vec<String> {
+    Vec::new()
 }
 
 fn parse_agents_yaml(data: &str) -> Result<AgentsConfig, String> {
@@ -467,6 +690,10 @@ fn unquote(value: &str) -> String {
 
 pub fn run() {
     tauri::Builder::default()
+        .setup(|app| {
+            app.manage(TerminalSession::default());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             run_thanos,
             select_workspace_folder,
@@ -474,7 +701,12 @@ pub fn run() {
             ensure_workspace,
             detect_agent_clis,
             read_agent_profiles,
-            write_agent_profile
+            read_project_config,
+            write_agent_profile,
+            spawn_terminal,
+            write_terminal,
+            resize_terminal,
+            kill_terminal
         ])
         .run(tauri::generate_context!())
         .expect("error while running Thanos Desktop UI");
