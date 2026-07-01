@@ -60,6 +60,50 @@ type Runner struct {
 	SkillsDir string   `json:"skills_dir,omitempty"`
 }
 
+type TaskStatus string
+
+const (
+	TaskBacklog TaskStatus = "backlog"
+	TaskPlan    TaskStatus = "plan"
+	TaskExecute TaskStatus = "execute"
+	TaskVerify  TaskStatus = "verify"
+	TaskDone    TaskStatus = "done"
+)
+
+type Task struct {
+	ID             string     `yaml:"id" json:"id"`
+	Title          string     `yaml:"title" json:"title"`
+	Description    string     `yaml:"description" json:"description"`
+	Status         TaskStatus `yaml:"status" json:"status"`
+	Priority       string     `yaml:"priority" json:"priority"`
+	ParentTaskID   string     `yaml:"parent_task_id,omitempty" json:"parent_task_id,omitempty"`
+	Subtasks       []string   `yaml:"subtasks,omitempty" json:"subtasks,omitempty"`
+	AssignedAgent  string     `yaml:"assigned_agent,omitempty" json:"assigned_agent,omitempty"`
+	BranchName     string     `yaml:"branch_name,omitempty" json:"branch_name,omitempty"`
+	WorktreePath   string     `yaml:"worktree_path,omitempty" json:"worktree_path,omitempty"`
+	CreatedAt      time.Time  `yaml:"created_at" json:"created_at"`
+	UpdatedAt      time.Time  `yaml:"updated_at" json:"updated_at"`
+	PlanPath       string     `yaml:"plan_path" json:"plan_path"`
+	LogPath        string     `yaml:"log_path" json:"log_path"`
+	ReviewPath     string     `yaml:"review_path" json:"review_path"`
+	TestResultPath string     `yaml:"test_result_path" json:"test_result_path"`
+	ReviewApproved bool       `yaml:"review_approved,omitempty" json:"review_approved,omitempty"`
+	TestsPassed    bool       `yaml:"tests_passed,omitempty" json:"tests_passed,omitempty"`
+}
+
+type AgentProfile struct {
+	Name         string            `yaml:"name" json:"name"`
+	Command      string            `yaml:"command" json:"command"`
+	Args         []string          `yaml:"args,omitempty" json:"args,omitempty"`
+	Env          map[string]string `yaml:"env,omitempty" json:"env,omitempty"`
+	Role         string            `yaml:"role" json:"role"`
+	AllowedSteps []TaskStatus      `yaml:"allowed_steps" json:"allowed_steps"`
+}
+
+type AgentsConfig struct {
+	Agents []AgentProfile `yaml:"agents" json:"agents"`
+}
+
 type LSP struct {
 	Command  string            `json:"command"`
 	Args     []string          `json:"args,omitempty"`

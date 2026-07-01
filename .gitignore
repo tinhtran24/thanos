@@ -2,3 +2,7 @@
 .DS_Store
 *.log
 cli-sample
+*/.node_module/
+apps/thanos-desktop/node_modules/
+/apps/thanos-desktop/dist/
+/apps/thanos-desktop/src-tauri/target/

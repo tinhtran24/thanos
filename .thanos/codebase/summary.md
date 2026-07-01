@@ -1,57 +1,59 @@
 # Thanos Codebase Graph
 
-Generated: 2026-06-25T08:12:44Z
+Generated: 2026-07-01T01:31:17Z
 
-- Files: 400
-- Symbols: 2328
-- Relationships: 13936
+- Files: 407
+- Symbols: 2440
+- Relationships: 28370
 
 ## Languages
 
-- go: 383 files
+- go: 385 files
 - python: 16 files
+- rust: 3 files
+- typescript: 2 files
 - javascript: 1 files
 
 ## Key Symbols
 
-- `buildAgentRegistry` (function) — cli-sample/cmd/app/buildAgentRegistry.go:23
-- `dispatcherSelector` (function) — cli-sample/cmd/app/buildAgentRegistry.go:67
-- `summarySelector` (function) — cli-sample/cmd/app/buildAgentRegistry.go:76
-- `refreshHost` (function) — cli-sample/cmd/app/buildAgentRegistry.go:85
-- `reloadTelegram` (function) — cli-sample/cmd/app/cmdDeamon.go:100
-- `reloadKuradb` (function) — cli-sample/cmd/app/cmdDeamon.go:134
-- `disableKuradb` (function) — cli-sample/cmd/app/cmdDeamon.go:167
-- `cmdDaemon` (function) — cli-sample/cmd/app/cmdDeamon.go:182
-- `watchConfig` (function) — cli-sample/cmd/app/cmdDeamon.go:322
-- `runSkill` (function) — cli-sample/cmd/app/cmdDeamon.go:385
-- `reloadDiscord` (function) — cli-sample/cmd/app/cmdDeamon.go:66
-- `cmdMCPServer` (function) — cli-sample/cmd/app/cmdMCPServer.go:16
-- `daemonSlogHandler` (struct) — cli-sample/cmd/app/daemonSlog.go:18
-- `Enabled` (function) — cli-sample/cmd/app/daemonSlog.go:22
-- `Handle` (function) — cli-sample/cmd/app/daemonSlog.go:26
-- `WithAttrs` (function) — cli-sample/cmd/app/daemonSlog.go:44
-- `WithGroup` (function) — cli-sample/cmd/app/daemonSlog.go:48
-- `installDaemonSlog` (function) — cli-sample/cmd/app/daemonSlog.go:52
-- `setSummaryCron` (function) — cli-sample/cmd/app/main.go:104
-- `initMCP` (function) — cli-sample/cmd/app/main.go:133
+- `stepCopy` (symbol) — apps/thanos-desktop/src/main.ts:1002
+- `ownerInitial` (symbol) — apps/thanos-desktop/src/main.ts:1012
+- `formatUpdated` (symbol) — apps/thanos-desktop/src/main.ts:1016
+- `pushActivity` (symbol) — apps/thanos-desktop/src/main.ts:1023
+- `upsertTask` (symbol) — apps/thanos-desktop/src/main.ts:1033
+- `restoreSettings` (symbol) — apps/thanos-desktop/src/main.ts:1041
+- `saveSettings` (symbol) — apps/thanos-desktop/src/main.ts:1046
+- `fallbackAgents` (symbol) — apps/thanos-desktop/src/main.ts:1051
+- `installedAgentSummary` (symbol) — apps/thanos-desktop/src/main.ts:1061
+- `basename` (symbol) — apps/thanos-desktop/src/main.ts:1066
+- `escapeHtml` (symbol) — apps/thanos-desktop/src/main.ts:1071
+- `renderAppShell` (symbol) — apps/thanos-desktop/src/main.ts:139
+- `renderSidebar` (symbol) — apps/thanos-desktop/src/main.ts:160
+- `renderTopbar` (symbol) — apps/thanos-desktop/src/main.ts:244
+- `renderChatBar` (symbol) — apps/thanos-desktop/src/main.ts:269
+- `renderCommandPalette` (symbol) — apps/thanos-desktop/src/main.ts:291
+- `renderAll` (symbol) — apps/thanos-desktop/src/main.ts:305
+- `renderSkills` (symbol) — apps/thanos-desktop/src/main.ts:323
+- `renderAgentProfiles` (symbol) — apps/thanos-desktop/src/main.ts:343
+- `renderAgentSelect` (symbol) — apps/thanos-desktop/src/main.ts:363
 
 ## Hub Symbols
 
-- `String` — 574 incoming relationships (cli-sample/internal/agents/types/event.go:70)
-- `parse_optional_float` — 121 incoming relationships (cli-sample/doc/demo/fetch_crypto_price/script.py:171)
-- `Path` — 113 incoming relationships (internal/featuregraph/graph.go:20)
-- `as_string` — 99 incoming relationships (cli-sample/doc/demo/fetch_crypto_price/script.py:153)
-- `match` — 93 incoming relationships (cli-sample/internal/session/summary/validate.go:12)
-- `extract_js_ts_info` — 87 incoming relationships (cli-sample/extensions/skills/readme-generate/scripts/analyze_project.py:474)
-- `TypeInfo` — 87 incoming relationships (cli-sample/extensions/skills/readme-generate/scripts/analyze_project.py:28)
-- `find_balanced` — 80 incoming relationships (cli-sample/extensions/skills/tool-reviewer/scripts/scan_tools.py:312)
-- `Regist` — 70 incoming relationships (cli-sample/internal/tools/register/register.go:43)
-- `create_skill` — 70 incoming relationships (cli-sample/extensions/skills/skill-creator/scripts/test_package_skill.py:43)
+- `icon` — 1716 incoming relationships (apps/thanos-desktop/src/main.ts:550)
+- `pushActivity` — 1300 incoming relationships (apps/thanos-desktop/src/main.ts:1023)
+- `renderAll` — 1196 incoming relationships (apps/thanos-desktop/src/main.ts:305)
+- `String` — 1162 incoming relationships (cli-sample/internal/agents/types/event.go:70)
+- `byId` — 1040 incoming relationships (apps/thanos-desktop/src/main.ts:976)
+- `escapeHtml` — 988 incoming relationships (apps/thanos-desktop/src/main.ts:1071)
+- `trim` — 902 incoming relationships (cli-sample/internal/session/log/record.go:120)
+- `normalizeStatus` — 572 incoming relationships (apps/thanos-desktop/src/main.ts:988)
+- `filter` — 373 incoming relationships (cli-sample/internal/session/summary/prompt.go:30)
+- `renderArtifactPanel` — 312 incoming relationships (apps/thanos-desktop/src/main.ts:511)
 
 ## Detected Conventions
 
 - **Go formatting and tests:** Go source is present; use gofmt and keep tests in *_test.go files beside the package.
-- **Test organization:** 25 test files use language-native test naming.
-- **Internal package boundary:** 49 files live under internal/; keep non-public implementation there.
+- **Test organization:** 26 test files use language-native test naming.
+- **Internal package boundary:** 51 files live under internal/; keep non-public implementation there.
 
 Full machine-readable graph: `.thanos/codebase/graph.json`.

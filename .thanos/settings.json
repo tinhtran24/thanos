@@ -3,27 +3,36 @@
     "name": "thanos",
     "description": "",
     "language": "go",
-    "build": ["go build ./..."],
-    "test": ["go test ./..."],
-    "lint": ["go vet ./..."],
-    "rules": ["Keep role outputs isolated in .thanos.", "Do not bypass the deterministic phase state machine.", "Every implementation change requires objective test evidence."]
+    "package_manager": "npm",
+    "multi_package": true,
+    "packages": [
+      ".",
+      "apps/thanos-desktop",
+      "apps/thanos-desktop/src-tauri",
+      "cli-sample"
+    ],
+    "build": [
+      "npm --prefix apps/thanos-desktop run build"
+    ],
+    "rules": [
+      "Keep role outputs isolated in .thanos.",
+      "Do not bypass the deterministic phase state machine.",
+      "Every implementation change requires objective test evidence."
+    ]
   },
   "default_runner": "codex",
+  "max_rounds": 3,
   "runners": {
     "codex": {
       "command": "codex",
-      "args": ["exec", "--full-auto", "-"],
+      "args": [
+        "exec",
+        "--full-auto",
+        "-"
+      ],
       "agent": "codex",
       "skills_dir": ".agents/skills"
     }
   },
-  "skills": [
-    {
-      "name": "thanos-project-workflow",
-      "path": ".agents/skills/thanos-project-workflow/SKILL.md",
-      "source": "local",
-      "roles": ["planner", "coder", "reviewer", "tester"]
-    }
-  ],
   "locale": "en"
 }

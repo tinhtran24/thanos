@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -22,6 +24,7 @@ import (
 	"github.com/tinhtran/thanos/internal/prompts"
 	"github.com/tinhtran/thanos/internal/runner"
 	"github.com/tinhtran/thanos/internal/state"
+	"github.com/tinhtran/thanos/internal/taskworkflow"
 	"github.com/tinhtran/thanos/internal/tui"
 	"github.com/tinhtran/thanos/internal/ui"
 	"github.com/tinhtran/thanos/internal/workspace"
@@ -60,6 +63,10 @@ func Execute(ctx context.Context, args []string, version string, stdout, stderr 
 		return runBugfix(ws, args[1:], stdout)
 	case "status":
 		return runStatus(ws, stdout)
+	case "board":
+		return runBoard(ws, stdout)
+	case "task":
+		return runTask(ctx, ws, args[1:], stdout, stderr)
 	case "run":
 		return runFeature(ctx, ws, args[1:], stdout, stderr)
 	case "prompt":
@@ -342,6 +349,784 @@ func runStatus(ws *workspace.Workspace, stdout io.Writer) error {
 	}
 	ui.Block(stdout, ui.Table([]string{"ID", "STATUS", "PHASE", "TITLE"}, rows))
 	return nil
+}
+
+func runBoard(ws *workspace.Workspace, stdout io.Writer) error {
+	tasks, err := ws.ListTasks()
+	if err != nil {
+		return err
+	}
+	if len(tasks) == 0 {
+		ui.Info(stdout, "No tasks.")
+		return nil
+	}
+	order := []model.TaskStatus{
+		model.TaskBacklog, model.TaskPlan, model.TaskExecute, model.TaskVerify, model.TaskDone,
+	}
+	byStatus := map[model.TaskStatus][]model.Task{}
+	for _, task := range tasks {
+		byStatus[task.Status] = append(byStatus[task.Status], task)
+	}
+	for _, status := range order {
+		rows := [][]string{}
+		for _, task := range byStatus[status] {
+			parent := task.ParentTaskID
+			if parent == "" {
+				parent = "-"
+			}
+			rows = append(rows, []string{task.ID, task.Priority, task.AssignedAgent, parent, task.Title})
+		}
+		ui.Block(stdout, ui.Section(string(status), nil))
+		if len(rows) == 0 {
+			ui.Info(stdout, "Empty")
+			continue
+		}
+		ui.Block(stdout, ui.Table([]string{"ID", "PRIORITY", "AGENT", "PARENT", "TITLE"}, rows))
+	}
+	return nil
+}
+
+func runTask(ctx context.Context, ws *workspace.Workspace, args []string, stdout, stderr io.Writer) error {
+	if len(args) == 0 {
+		return errors.New("usage: thanos task create|split|plan|execute|verify|done|reopen")
+	}
+	switch args[0] {
+	case "list":
+		return runTaskList(ws, args[1:], stdout)
+	case "show":
+		return runTaskShow(ws, args[1:], stdout)
+	case "create":
+		return runTaskCreate(ws, args[1:], stdout)
+	case "split":
+		return runTaskSplit(ws, args[1:], stdout)
+	case "plan":
+		return runTaskPlan(ws, args[1:], stdout)
+	case "execute", "run":
+		return runTaskExecute(ctx, ws, args[1:], stdout, stderr)
+	case "verify", "review", "test":
+		return runTaskVerify(ctx, ws, args[1:], stdout, stderr)
+	case "done":
+		return runTaskDone(ws, args[1:], stdout)
+	case "reopen":
+		return runTaskReopen(ws, args[1:], stdout)
+	default:
+		return errors.New("usage: thanos task create|split|plan|execute|verify|done|reopen")
+	}
+}
+
+func runTaskList(ws *workspace.Workspace, args []string, stdout io.Writer) error {
+	if len(args) > 1 || (len(args) == 1 && args[0] != "--json") {
+		return errors.New("usage: thanos task list [--json]")
+	}
+	tasks, err := ws.ListTasks()
+	if err != nil {
+		return err
+	}
+	if len(args) == 1 {
+		return json.NewEncoder(stdout).Encode(tasks)
+	}
+	rows := make([][]string, 0, len(tasks))
+	for _, task := range tasks {
+		rows = append(rows, []string{task.ID, string(task.Status), task.Priority, task.AssignedAgent, task.Title})
+	}
+	ui.Block(stdout, ui.Table([]string{"ID", "STATUS", "PRIORITY", "AGENT", "TITLE"}, rows))
+	return nil
+}
+
+func runTaskShow(ws *workspace.Workspace, args []string, stdout io.Writer) error {
+	if len(args) < 1 || len(args) > 2 || (len(args) == 2 && args[1] != "--json") {
+		return errors.New("usage: thanos task show TASK_ID [--json]")
+	}
+	task, err := ws.LoadTask(args[0])
+	if err != nil {
+		return err
+	}
+	if len(args) == 2 {
+		return json.NewEncoder(stdout).Encode(task)
+	}
+	ui.Block(stdout, ui.Section("Task", []ui.Field{
+		{Label: "id", Value: task.ID},
+		{Label: "status", Value: string(task.Status)},
+		{Label: "priority", Value: task.Priority},
+		{Label: "agent", Value: emptyDash(task.AssignedAgent)},
+		{Label: "plan", Value: task.PlanPath},
+		{Label: "log", Value: task.LogPath},
+		{Label: "review", Value: task.ReviewPath},
+		{Label: "tests", Value: task.TestResultPath},
+		{Label: "title", Value: task.Title},
+	}))
+	return nil
+}
+
+func runTaskCreate(ws *workspace.Workspace, args []string, stdout io.Writer) error {
+	flags := flag.NewFlagSet("task create", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	description := flags.String("description", "", "task description")
+	priority := flags.String("priority", "medium", "priority")
+	agent := flags.String("agent", "", "assigned agent profile")
+	parent := flags.String("parent", "", "parent task id")
+	parsed, err := intersperseFlags(args, map[string]bool{
+		"--description": true, "--priority": true, "--agent": true, "--parent": true,
+	})
+	if err != nil {
+		return err
+	}
+	if err := flags.Parse(parsed); err != nil {
+		return err
+	}
+	title := strings.TrimSpace(strings.Join(flags.Args(), " "))
+	if title == "" {
+		return errors.New("usage: thanos task create \"Task title\" [--description TEXT] [--priority P] [--agent NAME]")
+	}
+	task, err := ws.NewTask(title, *description, *priority, *agent, *parent)
+	if err != nil {
+		return err
+	}
+	if err := ws.SaveTask(task); err != nil {
+		return err
+	}
+	if task.ParentTaskID != "" {
+		parentTask, err := ws.LoadTask(task.ParentTaskID)
+		if err != nil {
+			return err
+		}
+		parentTask.Subtasks = appendUnique(parentTask.Subtasks, task.ID)
+		parentTask.UpdatedAt = time.Now().UTC()
+		if err := ws.SaveTask(parentTask); err != nil {
+			return err
+		}
+	}
+	printExecLog(stdout, ui.ExecLogEntry{Type: "write", Path: ws.TaskPath(task.ID), Message: "Created task " + task.ID, Status: ui.Completed})
+	return nil
+}
+
+func runTaskSplit(ws *workspace.Workspace, args []string, stdout io.Writer) error {
+	if len(args) != 1 {
+		return errors.New("usage: thanos task split TASK_ID")
+	}
+	parent, err := ws.LoadTask(args[0])
+	if err != nil {
+		return err
+	}
+	templates := []struct {
+		suffix      string
+		description string
+		agentRole   string
+	}{
+		{"Plan", "Understand the task once and produce reusable implementation artifacts.", "planning"},
+		{"Execute", "Implement the saved plan in an isolated worktree and record changed files.", "implementation"},
+		{"Verify", "Review the execution summary and run validation checks.", "verification"},
+	}
+	for _, tmpl := range templates {
+		child, err := ws.NewTask(parent.Title+" - "+tmpl.suffix, tmpl.description+"\n\nParent: "+parent.ID+"\n"+parent.Description, parent.Priority, agentForRole(ws, tmpl.agentRole), parent.ID)
+		if err != nil {
+			return err
+		}
+		if err := ws.SaveTask(child); err != nil {
+			return err
+		}
+		parent.Subtasks = appendUnique(parent.Subtasks, child.ID)
+		printExecLog(stdout, ui.ExecLogEntry{Type: "write", Path: ws.TaskPath(child.ID), Message: "Created subtask " + child.ID, Status: ui.Completed})
+	}
+	parent.UpdatedAt = time.Now().UTC()
+	return ws.SaveTask(parent)
+}
+
+func runTaskPlan(ws *workspace.Workspace, args []string, stdout io.Writer) error {
+	if len(args) != 1 {
+		return errors.New("usage: thanos task plan TASK_ID")
+	}
+	task, err := ws.LoadTask(args[0])
+	if err != nil {
+		return err
+	}
+	if task.Status == model.TaskBacklog {
+		if task, err = taskworkflow.Transition(task, model.TaskPlan); err != nil {
+			return err
+		}
+	}
+	if _, err := os.Stat(ws.TaskPlanPath(task.ID)); err == nil {
+		task.PlanPath = filepath.ToSlash(filepath.Join(".thanos", "plans", task.ID+".md"))
+		task.UpdatedAt = time.Now().UTC()
+		if saveErr := ws.SaveTask(task); saveErr != nil {
+			return saveErr
+		}
+		printTaskStatus(stdout, task, "Plan already exists; reused saved plan")
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	memory := relatedFeatureMemory(ws, task)
+	plan := renderTaskPlan(task, memory)
+	if err := os.MkdirAll(filepath.Dir(ws.TaskPlanPath(task.ID)), 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(ws.TaskPlanPath(task.ID), []byte(plan), 0o644); err != nil {
+		return err
+	}
+	task.PlanPath = filepath.ToSlash(filepath.Join(".thanos", "plans", task.ID+".md"))
+	task.UpdatedAt = time.Now().UTC()
+	if err := ws.SaveTask(task); err != nil {
+		return err
+	}
+	printTaskStatus(stdout, task, "Plan generated")
+	printExecLog(stdout, ui.ExecLogEntry{Type: "write", Path: ws.TaskPlanPath(task.ID), Message: "Created approved-plan candidate", Status: ui.Completed})
+	return nil
+}
+
+func runTaskExecute(ctx context.Context, ws *workspace.Workspace, args []string, stdout, stderr io.Writer) error {
+	if len(args) != 1 {
+		return errors.New("usage: thanos task execute TASK_ID")
+	}
+	task, err := ws.LoadTask(args[0])
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(ws.TaskPlanPath(task.ID)); err != nil {
+		return fmt.Errorf("plan is required before Execute: run 'thanos task plan %s'", task.ID)
+	}
+	if task.Status != model.TaskExecute {
+		task, err = taskworkflow.Transition(task, model.TaskExecute)
+		if err != nil {
+			return err
+		}
+	}
+	if err := ensureTaskWorktree(ctx, ws, task, stdout, stderr); err != nil {
+		return err
+	}
+	if err := runTaskAgent(ctx, ws, task, stdout, stderr); err != nil {
+		task.UpdatedAt = time.Now().UTC()
+		_ = ws.SaveTask(task)
+		return err
+	}
+	if err := writeExecutionSummary(ctx, ws, task); err != nil {
+		return err
+	}
+	task, err = taskworkflow.Transition(task, model.TaskVerify)
+	if err != nil {
+		return err
+	}
+	if err := ws.SaveTask(task); err != nil {
+		return err
+	}
+	printTaskStatus(stdout, task, "Paused at Verify")
+	return printTaskVerifyGate(ws, task, stdout)
+}
+
+func runTaskVerify(ctx context.Context, ws *workspace.Workspace, args []string, stdout, stderr io.Writer) error {
+	if len(args) == 0 {
+		return errors.New("usage: thanos task verify TASK_ID [approve|request-changes|rerun-agent|reopen-plan]")
+	}
+	task, err := ws.LoadTask(args[0])
+	if err != nil {
+		return err
+	}
+	if len(args) > 1 {
+		switch args[1] {
+		case "approve":
+			task.ReviewApproved = true
+			task.UpdatedAt = time.Now().UTC()
+			if err := ws.SaveTask(task); err != nil {
+				return err
+			}
+		case "request-changes", "rerun-agent":
+			task.ReviewApproved = false
+			task, err = taskworkflow.Transition(task, model.TaskExecute)
+			if err != nil {
+				return err
+			}
+			if err := ws.SaveTask(task); err != nil {
+				return err
+			}
+		case "reopen-plan":
+			task.ReviewApproved = false
+			task, err = taskworkflow.Transition(task, model.TaskPlan)
+			if err != nil {
+				return err
+			}
+			if err := ws.SaveTask(task); err != nil {
+				return err
+			}
+		default:
+			return errors.New("usage: thanos task verify TASK_ID [approve|request-changes|rerun-agent|reopen-plan]")
+		}
+		return printTaskVerifyGate(ws, task, stdout)
+	}
+	if task.Status == model.TaskExecute {
+		task, err = taskworkflow.Transition(task, model.TaskVerify)
+		if err != nil {
+			return err
+		}
+		if err := ws.SaveTask(task); err != nil {
+			return err
+		}
+	}
+	if err := writeReviewReport(ws, task); err != nil {
+		return err
+	}
+	if err := runTaskTests(ctx, ws, task, stdout, stderr); err != nil {
+		task.TestsPassed = false
+		task.UpdatedAt = time.Now().UTC()
+		_ = ws.SaveTask(task)
+		return err
+	}
+	task.TestsPassed = true
+	task.UpdatedAt = time.Now().UTC()
+	if err := ws.SaveTask(task); err != nil {
+		return err
+	}
+	return printTaskVerifyGate(ws, task, stdout)
+}
+
+func printTaskVerifyGate(ws *workspace.Workspace, task model.Task, stdout io.Writer) error {
+	printTaskStatus(stdout, task, "Review gate")
+	ui.Block(stdout, ui.Section("Plan Checklist", []ui.Field{{Label: "plan", Value: task.PlanPath}, {Label: "approved", Value: fmt.Sprint(task.ReviewApproved)}, {Label: "tests", Value: fmt.Sprint(task.TestsPassed)}}))
+	ui.Block(stdout, ui.Section("Changed Files", []ui.Field{{Label: "worktree", Value: task.WorktreePath}}))
+	if summary, err := os.ReadFile(ws.TaskLogPath(task.ID)); err == nil {
+		ui.Raw(stdout, string(summary))
+	} else {
+		ui.Info(stdout, "No execution summary yet.")
+	}
+	if review, err := os.ReadFile(ws.TaskReviewPath(task.ID)); err == nil {
+		ui.Raw(stdout, string(review))
+	} else {
+		ui.Info(stdout, "No review result yet.")
+	}
+	if tests, err := os.ReadFile(ws.TaskTestResultPath(task.ID)); err == nil {
+		ui.Raw(stdout, string(tests))
+	} else {
+		ui.Info(stdout, "No test result yet.")
+	}
+	ui.Block(stdout, ui.Table([]string{"ACTION", "COMMAND"}, [][]string{
+		{"approve", "thanos task verify " + task.ID + " approve"},
+		{"request changes", "thanos task verify " + task.ID + " request-changes"},
+		{"rerun agent", "thanos task verify " + task.ID + " rerun-agent"},
+		{"reopen plan", "thanos task verify " + task.ID + " reopen-plan"},
+	}))
+	return nil
+}
+
+func runTaskTests(ctx context.Context, ws *workspace.Workspace, task model.Task, stdout, stderr io.Writer) error {
+	config, err := ws.ReadConfig()
+	if err != nil {
+		return err
+	}
+	commands := config.Project.Test
+	if len(commands) == 0 {
+		commands = []string{"go test ./..."}
+	}
+	root := ws.Root
+	if task.WorktreePath != "" {
+		root = filepath.Join(ws.Root, filepath.FromSlash(task.WorktreePath))
+	}
+	report := &strings.Builder{}
+	report.WriteString("# Test Result\n\n")
+	passed := true
+	for _, commandText := range commands {
+		report.WriteString("## `" + commandText + "`\n\n")
+		if err := runShellCommand(ctx, root, commandText, stdout, stderr, report); err != nil {
+			passed = false
+			report.WriteString("\nVERDICT: FAIL\n")
+			report.WriteString(err.Error() + "\n")
+			break
+		}
+		report.WriteString("\nVERDICT: PASS\n")
+	}
+	if err := os.MkdirAll(filepath.Dir(ws.TaskTestResultPath(task.ID)), 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(ws.TaskTestResultPath(task.ID), []byte(report.String()), 0o644); err != nil {
+		return err
+	}
+	if passed {
+		return nil
+	}
+	printTaskStatus(stderr, task, "Tests failed")
+	return fmt.Errorf("task %s tests failed", task.ID)
+}
+
+func runTaskDone(ws *workspace.Workspace, args []string, stdout io.Writer) error {
+	if len(args) != 1 {
+		return errors.New("usage: thanos task done TASK_ID")
+	}
+	task, err := ws.LoadTask(args[0])
+	if err != nil {
+		return err
+	}
+	if task.Status != model.TaskVerify {
+		return fmt.Errorf("task %s must be in Verify before Done", task.ID)
+	}
+	task, err = taskworkflow.Transition(task, model.TaskDone)
+	if err != nil {
+		return err
+	}
+	if err := ws.SaveTask(task); err != nil {
+		return err
+	}
+	printTaskStatus(stdout, task, "Task completed")
+	return nil
+}
+
+func runTaskReopen(ws *workspace.Workspace, args []string, stdout io.Writer) error {
+	if len(args) != 1 {
+		return errors.New("usage: thanos task reopen TASK_ID")
+	}
+	task, err := ws.LoadTask(args[0])
+	if err != nil {
+		return err
+	}
+	task.Status = model.TaskBacklog
+	task.ReviewApproved = false
+	task.TestsPassed = false
+	task.UpdatedAt = time.Now().UTC()
+	if err := ws.SaveTask(task); err != nil {
+		return err
+	}
+	printTaskStatus(stdout, task, "Task reopened")
+	return nil
+}
+
+func printTaskStatus(stdout io.Writer, task model.Task, message string) {
+	ui.Block(stdout, ui.Section("Task", []ui.Field{
+		{Label: "id", Value: task.ID},
+		{Label: "status", Value: string(task.Status)},
+		{Label: "agent", Value: emptyDash(task.AssignedAgent)},
+		{Label: "branch", Value: emptyDash(task.BranchName)},
+		{Label: "worktree", Value: emptyDash(task.WorktreePath)},
+		{Label: "message", Value: message},
+	}))
+}
+
+func renderTaskPlan(task model.Task, memory string) string {
+	if strings.TrimSpace(memory) == "" {
+		memory = "No related feature memory found."
+	}
+	return strings.TrimSpace(fmt.Sprintf(`# Plan: %s
+
+## Requirement Summary
+%s
+
+## Acceptance Criteria
+- Confirm the implementation satisfies the task request.
+- Keep review and test evidence under .thanos/.
+
+## Related Feature Memory
+%s
+
+## Affected Modules
+- TBD by planner before execution.
+
+## Task Checklist
+- Confirm assumptions and acceptance criteria.
+- Make the smallest coherent implementation change in the task worktree.
+- Update or add focused tests.
+- Produce an execution summary for Verify.
+
+## Risks
+- Scope may be broader than the initial task description.
+- Existing feature memory may be incomplete.
+
+## Test Strategy
+- Run the configured project smoke or unit test command.
+- Record skipped tests with a reason.
+
+## Rollback Plan
+- Keep all edits isolated in the task worktree and branch.
+- Remove the worktree or discard the task branch if review fails.
+
+## Optional Mermaid Diagram
+`+"```mermaid"+`
+flowchart LR
+  Backlog --> Plan --> Execute --> Verify --> Done
+  Verify --> Execute
+  Verify --> Plan
+`+"```"+`
+`, task.Title, task.Description, memory)) + "\n"
+}
+
+func writeTaskLog(ws *workspace.Workspace, task model.Task, content string) {
+	path := ws.TaskLogPath(task.ID)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return
+	}
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	defer file.Close()
+	fmt.Fprintln(file, content)
+}
+
+func relatedFeatureMemory(ws *workspace.Workspace, task model.Task) string {
+	features, err := filepath.Glob(filepath.Join(ws.DotDir(), "plan-graph", "features", "*.md"))
+	if err != nil {
+		return ""
+	}
+	taskText := strings.ToLower(task.Title + "\n" + task.Description)
+	var matches []string
+	for _, path := range features {
+		name := strings.TrimSuffix(filepath.Base(path), ".md")
+		if !strings.Contains(taskText, strings.ToLower(strings.ReplaceAll(name, "-", " "))) && !strings.Contains(taskText, strings.ToLower(name)) {
+			continue
+		}
+		data, err := os.ReadFile(path)
+		if err == nil {
+			matches = append(matches, "### "+name+"\n"+string(data))
+		}
+	}
+	return strings.Join(matches, "\n\n")
+}
+
+func updateTaskFeatureMemory(ws *workspace.Workspace, task model.Task) error {
+	name := task.Title
+	if task.ParentTaskID != "" {
+		name = task.ParentTaskID
+	}
+	path := ws.PlanGraphFeaturePath(name)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	executionSummary := readOptional(ws.TaskLogPath(task.ID))
+	testResult := readOptional(ws.TaskTestResultPath(task.ID))
+	content := fmt.Sprintf(`# %s
+
+## Last Updated
+%s
+
+## Changed Behavior
+Task %s: %s
+
+## Important Files
+%s
+
+## Decisions
+- Review approved: %t
+- Tests passed: %t
+
+## Test Notes
+%s
+
+## Future Risks
+- Revisit this memory if follow-up review finds regressions.
+`, name, time.Now().UTC().Format(time.RFC3339), task.ID, task.Title, strings.TrimSpace(executionSummary), task.ReviewApproved, task.TestsPassed, strings.TrimSpace(testResult))
+	return os.WriteFile(path, []byte(content), 0o644)
+}
+
+func ensureTaskWorktree(ctx context.Context, ws *workspace.Workspace, task model.Task, stdout, stderr io.Writer) error {
+	target := filepath.Join(ws.Root, filepath.FromSlash(task.WorktreePath))
+	if info, err := os.Stat(target); err == nil && info.IsDir() {
+		return nil
+	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return err
+	}
+	if err := runExternal(ctx, ws.Root, stdout, stderr, "git", "worktree", "add", "-b", task.BranchName, target); err != nil {
+		return fmt.Errorf("create task worktree: %w", err)
+	}
+	return nil
+}
+
+func runTaskAgent(ctx context.Context, ws *workspace.Workspace, task model.Task, stdout, stderr io.Writer) error {
+	profile, ok, err := taskAgent(ws, task, model.TaskExecute)
+	if err != nil {
+		return err
+	}
+	if !ok || profile.Command == "" {
+		writeTaskLog(ws, task, executePrompt(ws, task))
+		ui.Info(stdout, "No executable agent profile configured; wrote Execute prompt to "+task.LogPath)
+		return nil
+	}
+	worktree := filepath.Join(ws.Root, filepath.FromSlash(task.WorktreePath))
+	prompt := executePrompt(ws, task)
+	commandText := strings.TrimSpace(profile.Command + " " + strings.Join(profile.Args, " "))
+	printExecLog(stdout, ui.ExecLogEntry{Type: "exec", Command: commandText, Workdir: worktree, Status: ui.Running})
+	started := time.Now()
+	cmd := exec.CommandContext(ctx, profile.Command, profile.Args...)
+	cmd.Dir = worktree
+	cmd.Stdin = strings.NewReader(prompt)
+	logPath := ws.TaskLogPath(task.ID)
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
+		return err
+	}
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	defer logFile.Close()
+	cmd.Stdout = io.MultiWriter(stdout, logFile)
+	cmd.Stderr = io.MultiWriter(stderr, logFile)
+	cmd.Env = append(os.Environ(), "THANOS_TASK_ID="+task.ID, "THANOS_PROJECT_ROOT="+ws.Root)
+	for key, value := range profile.Env {
+		cmd.Env = append(cmd.Env, key+"="+value)
+	}
+	if err := cmd.Run(); err != nil {
+		printExecLog(stderr, ui.ExecLogEntry{Status: ui.Failed, DurationMs: time.Since(started).Milliseconds()})
+		return err
+	}
+	printExecLog(stdout, ui.ExecLogEntry{Status: ui.Succeeded, DurationMs: time.Since(started).Milliseconds()})
+	return nil
+}
+
+// roleForStep maps a task workflow step to the agent-profile role that should
+// run it, so the per-role Agent Profiles matrix (planner/coder/reviewer/tester)
+// drives which agent executes each step.
+func roleForStep(step model.TaskStatus) string {
+	switch step {
+	case model.TaskPlan:
+		return "planner"
+	case model.TaskExecute:
+		return "coder"
+	case model.TaskVerify:
+		return "reviewer"
+	default:
+		return ""
+	}
+}
+
+func taskAgent(ws *workspace.Workspace, task model.Task, step model.TaskStatus) (model.AgentProfile, bool, error) {
+	agents, err := ws.ReadAgents()
+	if err != nil {
+		return model.AgentProfile{}, false, err
+	}
+	// An explicit per-task assignment always wins.
+	if name := task.AssignedAgent; name != "" {
+		for _, profile := range agents.Agents {
+			if profile.Name == name && agentAllows(profile, step) {
+				return profile, true, nil
+			}
+		}
+		return model.AgentProfile{}, false, fmt.Errorf("agent profile %q does not allow %s", name, step)
+	}
+	// Otherwise prefer the profile assigned to this step's role.
+	if role := roleForStep(step); role != "" {
+		for _, profile := range agents.Agents {
+			if strings.EqualFold(profile.Role, role) && profile.Command != "" && agentAllows(profile, step) {
+				return profile, true, nil
+			}
+		}
+	}
+	// Fall back to the first profile that allows the step.
+	for _, profile := range agents.Agents {
+		if agentAllows(profile, step) {
+			return profile, true, nil
+		}
+	}
+	return model.AgentProfile{}, false, nil
+}
+
+func agentAllows(profile model.AgentProfile, step model.TaskStatus) bool {
+	if len(profile.AllowedSteps) == 0 {
+		return true
+	}
+	for _, allowed := range profile.AllowedSteps {
+		if allowed == step {
+			return true
+		}
+	}
+	return false
+}
+
+func agentForRole(ws *workspace.Workspace, role string) string {
+	agents, err := ws.ReadAgents()
+	if err != nil {
+		return ""
+	}
+	for _, profile := range agents.Agents {
+		if strings.EqualFold(profile.Role, role) {
+			return profile.Name
+		}
+	}
+	return ""
+}
+
+func executePrompt(ws *workspace.Workspace, task model.Task) string {
+	plan := readOptional(ws.TaskPlanPath(task.ID))
+	return strings.TrimSpace(fmt.Sprintf(`# Execute task
+
+Read and follow only the saved plan before editing code. Do not re-analyze the original ticket. Keep all work in this worktree. Do not merge.
+
+Task: %s
+Status: %s
+
+Saved plan:
+%s
+
+After execution, leave the repository ready for Verify. Thanos will stop at the human approval gate.
+`, task.ID, task.Status, plan)) + "\n"
+}
+
+func writeExecutionSummary(ctx context.Context, ws *workspace.Workspace, task model.Task) error {
+	root := filepath.Join(ws.Root, filepath.FromSlash(task.WorktreePath))
+	out, err := exec.CommandContext(ctx, "git", "-C", root, "diff", "--stat").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git diff --stat: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	files, err := exec.CommandContext(ctx, "git", "-C", root, "diff", "--name-only").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git diff --name-only: %w: %s", err, strings.TrimSpace(string(files)))
+	}
+	content := fmt.Sprintf("# Execution Summary\n\n## Changed Files\n%s\n\n## Completed Checklist\n- Review the saved plan checklist manually.\n\n## Diff Stat\n%s\n\n## Execution Notes\n- Verify reads this summary and the saved plan; the original ticket is not needed.\n", string(files), string(out))
+	if err := os.MkdirAll(filepath.Dir(ws.TaskLogPath(task.ID)), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(ws.TaskLogPath(task.ID), []byte(content), 0o644)
+}
+
+func writeReviewReport(ws *workspace.Workspace, task model.Task) error {
+	plan := readOptional(ws.TaskPlanPath(task.ID))
+	execution := readOptional(ws.TaskLogPath(task.ID))
+	content := fmt.Sprintf("# Review\n\n## Inputs\n- Plan: %s\n- Execution summary: %s\n\n## Self Review\n- Verify implementation against the saved plan.\n- Confirm tests, lint, and type checks are recorded when available.\n\n## Remaining Risks\n- Human approval is still required before Done.\n\n## Plan Excerpt\n%s\n\n## Execution Summary\n%s\n", task.PlanPath, task.LogPath, plan, execution)
+	if err := os.MkdirAll(filepath.Dir(ws.TaskReviewPath(task.ID)), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(ws.TaskReviewPath(task.ID), []byte(content), 0o644)
+}
+
+func runShellCommand(ctx context.Context, root, commandText string, stdout, stderr io.Writer, report io.Writer) error {
+	printExecLog(stdout, ui.ExecLogEntry{Type: "exec", Command: commandText, Workdir: root, Status: ui.Running})
+	started := time.Now()
+	cmd := shellCommand(ctx, commandText)
+	cmd.Dir = root
+	output, err := cmd.CombinedOutput()
+	fmt.Fprintln(report, "```")
+	fmt.Fprint(report, string(output))
+	fmt.Fprintln(report, "```")
+	if len(output) > 0 {
+		fmt.Fprint(stdout, string(output))
+	}
+	if err != nil {
+		fmt.Fprint(stderr, string(output))
+		printExecLog(stderr, ui.ExecLogEntry{Status: ui.Failed, DurationMs: time.Since(started).Milliseconds()})
+		return err
+	}
+	printExecLog(stdout, ui.ExecLogEntry{Status: ui.Succeeded, DurationMs: time.Since(started).Milliseconds()})
+	return nil
+}
+
+func readOptional(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
+func appendUnique(items []string, item string) []string {
+	for _, existing := range items {
+		if existing == item {
+			return items
+		}
+	}
+	return append(items, item)
+}
+
+func emptyDash(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return "-"
+	}
+	return value
 }
 
 func runFeature(ctx context.Context, ws *workspace.Workspace, args []string, stdout, stderr io.Writer) error {
@@ -996,21 +1781,24 @@ func syncSkillsToRunner(root string, runnerConfig model.Runner, skills []model.S
 			return err
 		}
 		if info, err := os.Lstat(target); err == nil {
-			if info.Mode()&os.ModeSymlink == 0 {
+			if info.Mode()&os.ModeSymlink != 0 {
+				existing, readErr := os.Readlink(target)
+				if readErr != nil {
+					return readErr
+				}
+				resolved := existing
+				if !filepath.IsAbs(resolved) {
+					resolved = filepath.Join(filepath.Dir(target), resolved)
+				}
+				if filepath.Clean(resolved) == filepath.Clean(sourceDir) {
+					continue
+				}
+			} else if runtime.GOOS != "windows" {
+				// On non-Windows a real (non-symlink) entry is unexpected and
+				// must not be clobbered. On Windows this is a prior copy we refresh.
 				return fmt.Errorf("cannot sync skill %s: %s already exists and is not a symlink", skill.Name, target)
 			}
-			existing, readErr := os.Readlink(target)
-			if readErr != nil {
-				return readErr
-			}
-			resolved := existing
-			if !filepath.IsAbs(resolved) {
-				resolved = filepath.Join(filepath.Dir(target), resolved)
-			}
-			if filepath.Clean(resolved) == filepath.Clean(sourceDir) {
-				continue
-			}
-			if err := os.Remove(target); err != nil {
+			if err := os.RemoveAll(target); err != nil {
 				return err
 			}
 		} else if !os.IsNotExist(err) {
@@ -1020,11 +1808,55 @@ func syncSkillsToRunner(root string, runnerConfig model.Runner, skills []model.S
 		if err != nil {
 			return err
 		}
-		if err := os.Symlink(relative, target); err != nil {
+		if err := linkOrCopyDir(sourceDir, target, relative); err != nil {
 			return fmt.Errorf("link skill %s into %s: %w", skill.Name, targetRoot, err)
 		}
 	}
 	return nil
+}
+
+// shellCommand runs commandText through the platform shell (sh on Unix, cmd on
+// Windows) so project-configured test/build commands work cross-platform.
+func shellCommand(ctx context.Context, commandText string) *exec.Cmd {
+	if runtime.GOOS == "windows" {
+		return exec.CommandContext(ctx, "cmd", "/C", commandText)
+	}
+	return exec.CommandContext(ctx, "sh", "-c", commandText)
+}
+
+// linkOrCopyDir symlinks target -> sourceDir (via the relative linkName), and
+// falls back to a recursive copy on Windows where symlinks require privilege.
+func linkOrCopyDir(sourceDir, target, linkName string) error {
+	if err := os.Symlink(linkName, target); err == nil {
+		return nil
+	} else if runtime.GOOS != "windows" {
+		return err
+	}
+	return copyDir(sourceDir, target)
+}
+
+func copyDir(src, dst string) error {
+	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		targetPath := filepath.Join(dst, rel)
+		if info.IsDir() {
+			return os.MkdirAll(targetPath, 0o755)
+		}
+		if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
+			return err
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(targetPath, data, info.Mode().Perm())
+	})
 }
 
 func discoverSkillFiles(root string) (map[string]string, error) {
@@ -1325,6 +2157,16 @@ Usage:
   thanos bugfix FEATURE_ID "Bugfix title" [--description TEXT] [--rules "A; B"]
   thanos run FEATURE_ID [--runner NAME]
   thanos status
+  thanos board
+  thanos task create "Task title" [--description TEXT] [--priority P] [--agent NAME]
+  thanos task list [--json]
+  thanos task show TASK_ID [--json]
+  thanos task split TASK_ID
+  thanos task plan TASK_ID
+  thanos task execute TASK_ID
+  thanos task verify TASK_ID [approve|request-changes|rerun-agent|reopen-plan]
+  thanos task done TASK_ID
+  thanos task reopen TASK_ID
   thanos prompt FEATURE_ID planner|coder|reviewer|tester
   thanos transition FEATURE_ID PHASE
   thanos done FEATURE_ID

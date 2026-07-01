@@ -484,3 +484,46 @@ func stubExternal(t *testing.T, fn func(root, name string, args []string) error)
 	}
 	return func() { runExternal = original }
 }
+
+func TestTaskAgentPrefersRoleForStep(t *testing.T) {
+	ws := initializedWorkspace(t)
+	if err := ws.WriteAgents(model.AgentsConfig{Agents: []model.AgentProfile{
+		{Name: "planner", Command: "gemini", Role: "planner", AllowedSteps: []model.TaskStatus{model.TaskPlan}},
+		{Name: "coder", Command: "claude", Role: "coder", AllowedSteps: []model.TaskStatus{model.TaskExecute}},
+		{Name: "reviewer", Command: "codex", Role: "reviewer", AllowedSteps: []model.TaskStatus{model.TaskVerify}},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	cases := map[model.TaskStatus]string{
+		model.TaskPlan:    "gemini",
+		model.TaskExecute: "claude",
+		model.TaskVerify:  "codex",
+	}
+	for step, wantCommand := range cases {
+		profile, ok, err := taskAgent(ws, model.Task{}, step)
+		if err != nil || !ok {
+			t.Fatalf("taskAgent(%s): ok=%v err=%v", step, ok, err)
+		}
+		if profile.Command != wantCommand {
+			t.Fatalf("taskAgent(%s) command = %q, want %q", step, profile.Command, wantCommand)
+		}
+	}
+}
+
+func TestTaskAgentExplicitAssignmentWins(t *testing.T) {
+	ws := initializedWorkspace(t)
+	if err := ws.WriteAgents(model.AgentsConfig{Agents: []model.AgentProfile{
+		{Name: "coder", Command: "claude", Role: "coder", AllowedSteps: []model.TaskStatus{model.TaskExecute}},
+		{Name: "codex", Command: "codex", Role: "implementation", AllowedSteps: []model.TaskStatus{model.TaskExecute}},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	profile, ok, err := taskAgent(ws, model.Task{AssignedAgent: "codex"}, model.TaskExecute)
+	if err != nil || !ok {
+		t.Fatalf("taskAgent: ok=%v err=%v", ok, err)
+	}
+	if profile.Command != "codex" {
+		t.Fatalf("explicit assignment command = %q, want codex", profile.Command)
+	}
+}
