@@ -1,0 +1,14 @@
+{
+  "id": "T-100-planner-1782979616",
+  "task_id": "T-100",
+  "agent_type": "planner",
+  "provider": "claude-code",
+  "command": "claude",
+  "args": [],
+  "status": "running",
+  "pty_session_id": "T-100-planner-1782979616",
+  "conversation_log_path": "/Users/tinh.tran/Tool/thanos/.thanos/logs/sessions/T-100-planner-1782979616.log",
+  "worktree_path": "/Users/tinh.tran/Tool/thanos",
+  "started_at": 1782979616,
+  "ended_at": null
+}

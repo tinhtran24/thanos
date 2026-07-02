@@ -1,0 +1,67 @@
+{
+  "id": "plan-T-106",
+  "task_id": "T-106",
+  "summary": "Create a cart domain model, backend API, frontend context, persistent state, UI components, and tests.",
+  "steps": [
+    {
+      "id": "1",
+      "title": "Analyze requirements and data model",
+      "description": "Model Cart, CartItem, Product relationships",
+      "status": "pending"
+    },
+    {
+      "id": "2",
+      "title": "Create cart schema and migrations",
+      "description": "Add cart tables and indexes",
+      "status": "pending"
+    },
+    {
+      "id": "3",
+      "title": "Implement backend API endpoints",
+      "description": "CRUD operations for cart",
+      "status": "pending"
+    },
+    {
+      "id": "4",
+      "title": "Implement frontend state management",
+      "description": "React context for cart state",
+      "status": "pending"
+    },
+    {
+      "id": "5",
+      "title": "Create cart UI components",
+      "description": "Cart icon, sidebar, item list",
+      "status": "pending"
+    },
+    {
+      "id": "6",
+      "title": "Add persistence and sync",
+      "description": "localStorage plus backend sync",
+      "status": "pending"
+    },
+    {
+      "id": "7",
+      "title": "Write tests",
+      "description": "Unit and integration tests",
+      "status": "pending"
+    }
+  ],
+  "risks": [
+    "Data consistency issues",
+    "Performance with large carts",
+    "Sync conflicts"
+  ],
+  "files_to_touch": [
+    "api/cart/route.ts",
+    "models/cart.ts",
+    "components/CartSidebar.tsx",
+    "context/CartContext.tsx",
+    "types/cart.ts"
+  ],
+  "test_strategy": [
+    "Unit tests for cart logic",
+    "Integration tests for API",
+    "E2E test for cart flow"
+  ],
+  "approval_status": "pending"
+}

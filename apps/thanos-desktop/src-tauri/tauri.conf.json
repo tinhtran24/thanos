@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "identifier": "dev.thanos.desktop",
   "build": {
-    "beforeDevCommand": "npm run dev",
+    "beforeDevCommand": "npm run build:thanos && npm run dev",
     "devUrl": "http://127.0.0.1:1420",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "npm run build:thanos && npm run build",
     "frontendDist": "../dist"
   },
   "app": {

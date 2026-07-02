@@ -1,0 +1,30 @@
+@import "tailwindcss";
+
+@theme {
+  --color-bg-app: #070A12;
+  --color-bg-sidebar: #0B1020;
+  --color-bg-panel: #0F172A;
+  --color-bg-card: #111827;
+  --color-border-soft: #1F2937;
+  --color-text-main: #E5E7EB;
+  --color-text-muted: #9CA3AF;
+  --color-purple-primary: #7C3AED;
+  --color-purple-hover: #8B5CF6;
+  --color-blue-info: #38BDF8;
+  --color-green-success: #22C55E;
+  --color-yellow-warning: #EAB308;
+  --color-red-danger: #EF4444;
+  --color-orange-review: #F97316;
+}
+
+html,
+body,
+#app {
+  min-height: 100vh;
+  margin: 0;
+  background: #070A12;
+}
+
+body {
+  overflow: hidden;
+}
